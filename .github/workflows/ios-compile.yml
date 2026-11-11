@@ -38,6 +38,7 @@ jobs:
           python3 tooling/ios/tests/phone-self-runner.test.py -v
 
   compile:
+    if: github.ref != 'refs/heads/ios/lock-screen-xcode27'
     runs-on: macos-26
     timeout-minutes: 90
     env:
@@ -103,13 +104,13 @@ jobs:
         run: bash ../tooling/ios/build.sh --release --no-codesign
 
   engine:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 120
     defaults:
       run:
         shell: bash
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       DSH_IOS_ENGINE_WORK: ${{ github.workspace }}/../engine-work
       FLUTTER_VERSION: 3.47.7
       FLUTTER_SHA256: dd9da574c3168460550117eb0e8dd0313ae934fabf64a82a6d557fff5fd1422e
