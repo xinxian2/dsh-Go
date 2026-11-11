@@ -34,7 +34,7 @@ class GuestEmbedding(unittest.TestCase):
             file = self.root / path
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text('fixture\n')
-        for name in ('actions.mjs', 'bridge.mjs', 'plugin.mjs', 'catalog.json'):
+        for name in ('actions.mjs', 'bridge.mjs', 'descriptions.mjs', 'plugin.mjs', 'catalog.json'):
             file = self.root / 'runtime/ios/phone' / name
             file.parent.mkdir(parents=True, exist_ok=True)
             file.write_text('fixture\n')
