@@ -8,6 +8,7 @@ import UIKit
 final class ContinuedRun {
   /// Whether the task is running now.
   var onChange: ((Bool) -> Void)?
+  var onDiagnostic: ((String) -> Void)?
 
   private var wanted = false
   /// The system or the user ended it: not again until the next turn.
@@ -50,7 +51,10 @@ final class ContinuedRun {
       }
       self.started(task)
     }
-    guard registered else { return }
+    guard registered else {
+      onDiagnostic?("registration_failed")
+      return
+    }
     let request = BGContinuedProcessingTaskRequest(
       identifier: identifier,
       title: String(localized: "DSH Go is working"),
@@ -60,8 +64,9 @@ final class ContinuedRun {
     do {
       try BGTaskScheduler.shared.submit(request)
       submitted = identifier
+      onDiagnostic?("submitted")
     } catch {
-      // The system said no. The engine pauses in the background, as it does without this.
+      onDiagnostic?("submission_failed_\((error as NSError).code)")
     }
   }
 
@@ -77,6 +82,7 @@ final class ContinuedRun {
       DispatchQueue.main.async {
         guard let self, let task, self.task === task else { return }
         self.spent = true
+        self.onDiagnostic?("expired")
         self.finish(success: false)
       }
     }
@@ -85,6 +91,7 @@ final class ContinuedRun {
     progress = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak task] _ in
       task?.progress.completedUnitCount += 1
     }
+    onDiagnostic?("started")
     onChange?(true)
   }
 

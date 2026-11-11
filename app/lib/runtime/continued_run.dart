@@ -15,8 +15,8 @@ import '../state/read_list_identity.dart';
 import '../state/sessions_state.dart';
 import 'runtime_state.dart';
 
-/// Whether a turn is going on the on-device engine: in any listed conversation, or in the open
-/// one, which a list doesn't show until it has its first message.
+/// Whether the on-device engine has a running turn or a foreground submission
+/// that is about to start one.
 final localTurnRunningProvider = Provider<bool>((ref) {
   if (!ref.watch(activeHostProvider).isLocal) return false;
   final sessions = ref.watch(sessionsProvider.select((state) => state.value));
@@ -34,7 +34,16 @@ final localTurnRunningProvider = Provider<bool>((ref) {
       sessions.any((session) => session.running);
   if (listed) return true;
   final open = ref.watch(currentSessionProvider);
-  return open != null && ref.watch(chatProvider(open).select((chat) => chat.running));
+  if (open == null) return false;
+  return ref.watch(
+    chatProvider(open).select(
+      (chat) =>
+          chat.running ||
+          chat.pending.any(
+            (prompt) => prompt.mode == SendMode.now && prompt.inboxId == null && !prompt.failed && !prompt.isAutomatic,
+          ),
+    ),
+  );
 });
 
 /// Keep this watched while the shell is up. Draws nothing and holds nothing.

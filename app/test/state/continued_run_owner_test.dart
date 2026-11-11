@@ -1,6 +1,7 @@
 import 'package:dsh_app/runtime/continued_run.dart';
 import 'package:dsh_app/state/android_features.dart';
 import 'package:dsh_app/state/connection_state.dart';
+import 'package:dsh_app/state/chat_state.dart';
 import 'package:dsh_app/state/hosts_state.dart';
 import 'package:dsh_app/state/read_list_identity.dart';
 import 'package:dsh_app/state/sessions_state.dart';
@@ -9,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../chat/support/harness.dart' show FakeChatController;
 import 'read_list_refresh_test.dart' show ListHost, listOverrides, switchConnectionProvider, switchIdentityProvider;
 
 Future<void> _flush(ProviderContainer container) async {
@@ -21,6 +23,43 @@ Future<void> _flush(ProviderContainer container) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const channel = MethodChannel('dsh/runtime');
+
+  test('iOS requests background time before the host reports a running turn', () async {
+    SharedPreferences.setMockInitialValues({});
+    final host = ListHost('local');
+    final chat = FakeChatController('local-0', const ChatState());
+    final calls = <bool>[];
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(channel, (call) async {
+      if (call.method == 'turnRunning') calls.add((call.arguments as Map)['running'] as bool);
+      return null;
+    });
+    final container = ProviderContainer(overrides: [
+      ...listOverrides(host),
+      operatingSystemProvider.overrideWithValue('ios'),
+      chatProvider.overrideWith2((_) => chat),
+    ]);
+    addTearDown(() async {
+      container.dispose();
+      await host.client.close();
+      messenger.setMockMethodCallHandler(channel, null);
+    });
+    container.read(currentSessionProvider.notifier).select('local-0');
+    container.listen(continuedRunProvider, (_, _) {});
+    await _flush(container);
+    final prompt = PendingPrompt(requestId: 'test', text: 'hello', time: DateTime.now());
+    chat.emit(ChatState(pending: [prompt]));
+    await _flush(container);
+    expect(calls, [false, true]);
+
+    chat.emit(const ChatState(running: true));
+    await _flush(container);
+    expect(calls, [false, true]);
+
+    chat.emit(ChatState(pending: [prompt.failedAt(1), prompt.withMode(SendMode.queue)]));
+    await _flush(container);
+    expect(calls, [false, true, false]);
+  });
 
   for (final previousLocal in [false, true]) {
     for (final scenario in ['idle', 'running', 'error']) {

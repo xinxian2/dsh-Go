@@ -291,7 +291,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
   private var retryDelay = 1.0
   private var retry: DispatchWorkItem?
   private var task: URLSessionTask?
-  private var failures = 0
+  private var connectionRefusals = 0
 
   private let queue: DispatchQueue
   private let changed: () -> Void
@@ -324,7 +324,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     resetRetry()
     self.foreground = foreground
     revision += 1
-    failures = 0
+    connectionRefusals = 0
     push()
   }
 
@@ -334,7 +334,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     resetRetry()
     continuedProcessing = continued
     revision += 1
-    failures = 0
+    connectionRefusals = 0
     push()
   }
 
@@ -343,7 +343,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     resetRetry()
     self.pictureInPicture = pictureInPicture
     revision += 1
-    failures = 0
+    connectionRefusals = 0
     push()
   }
 
@@ -358,7 +358,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     requested = -1
     acknowledged = -1
     failure = nil
-    failures = 0
+    connectionRefusals = 0
     push()
     if baseUrl == nil { changed() }
   }
@@ -386,15 +386,15 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
       guard let self, current() else { return }
       if let code {
         self.failure = code
-        self.failures += 1
-        // Sockets don't always survive a long suspension. When the listener is gone and
-        // the person is looking at the app, the only way back is a new run.
-        if code == "ios_lifecycle_unavailable", self.foreground, self.failures >= 2 {
+        self.connectionRefusals = code == "ios_lifecycle_connection_refused" ? self.connectionRefusals + 1 : 0
+        // A slow or interrupted lifecycle request does not prove the listener
+        // is gone. Restarting a live engine would interrupt its current turn.
+        if self.foreground, self.connectionRefusals >= 2 {
           self.lostServer()
           return
         }
         let item = DispatchWorkItem { [weak self] in
-          guard let self else { return }
+          guard let self, current() else { return }
           self.retry = nil
           self.requested = -1
           self.push()
@@ -405,18 +405,36 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
       } else {
         self.acknowledged = revision
         self.failure = nil
-        self.failures = 0
+        self.connectionRefusals = 0
       }
       self.changed()
     }
     if cookie == nil {
       authenticate(origin: origin, token: token, current: current) { [weak self] code in
         guard let self else { return }
-        if let code { done(code) } else { self.send(origin: origin, revision: revision, done: done) }
+        if let code { done(code) } else { self.send(origin: origin, revision: revision, current: current, done: done) }
       }
     } else {
-      send(origin: origin, revision: revision, done: done)
+      send(origin: origin, revision: revision, current: current, done: done)
     }
+  }
+
+  private static func transportFailure(_ error: Error?) -> String {
+    var cause = error.map { $0 as NSError }
+    while let current = cause {
+      if current.domain == NSPOSIXErrorDomain && current.code == Int(ECONNREFUSED) {
+        return "ios_lifecycle_connection_refused"
+      }
+      cause = current.userInfo[NSUnderlyingErrorKey] as? NSError
+    }
+    if let urlError = error as? URLError {
+      switch urlError.code {
+      case .timedOut: return "ios_lifecycle_timeout"
+      case .networkConnectionLost: return "ios_lifecycle_connection_lost"
+      default: break
+      }
+    }
+    return "ios_lifecycle_unavailable"
   }
 
   private func authenticate(origin: String, token: String, current: @escaping () -> Bool, done: @escaping (String?) -> Void) {
@@ -428,7 +446,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     let request = URLRequest(url: url)
     task = session.dataTask(with: request) { [weak self] _, response, error in
       guard let self, current() else { return }
-      guard error == nil, let http = response as? HTTPURLResponse else { return done("ios_lifecycle_unavailable") }
+      guard error == nil, let http = response as? HTTPURLResponse else { return done(Self.transportFailure(error)) }
       let header = http.value(forHTTPHeaderField: "Set-Cookie") ?? ""
       let matches = header.regexMatches(#"dsh-auth-[A-Za-z0-9_-]+=[A-Za-z0-9_.-]+"#)
       guard http.statusCode == 303, matches.count == 1 else { return done("ios_lifecycle_auth") }
@@ -438,7 +456,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     task?.resume()
   }
 
-  private func send(origin: String, revision: Int, done: @escaping (String?) -> Void) {
+  private func send(origin: String, revision: Int, current: @escaping () -> Bool, done: @escaping (String?) -> Void) {
     guard let url = URL(string: origin + "/dsh-go/v1/lifecycle"), let cookie else { return done("ios_lifecycle_endpoint") }
     var request = URLRequest(url: url)
     request.httpMethod = "POST"
@@ -453,8 +471,8 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     ]
     request.httpBody = try? JSONSerialization.data(withJSONObject: body)
     task = session.dataTask(with: request) { [weak self] data, response, error in
-      guard let self else { return }
-      guard error == nil, let http = response as? HTTPURLResponse else { return done("ios_lifecycle_unavailable") }
+      guard let self, current() else { return }
+      guard error == nil, let http = response as? HTTPURLResponse else { return done(Self.transportFailure(error)) }
       if http.statusCode == 401 { self.cookie = nil }
       guard http.statusCode == 200, let data,
         let ack = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -556,6 +574,10 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
     events.setStreamHandler(self)
     queue.async { [self] in
       skillOwner = skills.attachOwner()
+    }
+    continued.onDiagnostic = { [weak self] code in
+      guard let self else { return }
+      self.queue.async { self.appendLog("iOS background turn: " + code, stream: "system") }
     }
     continued.onChange = { [weak self] running in
       guard let self else { return }
@@ -831,7 +853,10 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
 
   private func lifecycleChanged() {
     let error = lifecycle.failure
-    if error != nil, error != lastLifecycleError { emit(["type": "notice", "text": EngineChannel.notice]) }
+    if let error, error != lastLifecycleError {
+      appendLog("iOS engine lifecycle: " + error, stream: "system")
+      emit(["type": "notice", "text": EngineChannel.notice])
+    }
     lastLifecycleError = error
     emitStatus()
     if error == nil { endBackgroundTask() }
@@ -1114,7 +1139,7 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
     guard let lastStart, !requestedStop, pending == nil,
       native?.currentState()["phase"] as? String == "running"
     else { return }
-    appendLog("本机引擎的本地服务在后台被系统回收，正在重新启动。", stream: "system")
+    appendLog("本机引擎的本地端口连续拒绝连接，正在重新启动。", stream: "system")
     retirePhone()
     lifecycle.runtime(baseUrl: nil, token: nil)
     skills.stop(runtimeGeneration: runtimeGeneration)
