@@ -7,6 +7,7 @@ import '../phone/phone_channel.dart';
 import '../l10n/l10n.dart';
 import '../runtime/runtime_bridge.dart';
 import '../runtime/runtime_state.dart';
+import 'android_features.dart';
 import 'connection_state.dart';
 import 'engine_control.dart';
 import 'hosts_state.dart';
@@ -384,12 +385,11 @@ final phoneConfirmPendingProvider = Provider<void>((ref) {
   }());
 });
 
-/// 停止 on the overlay or the notification ends the agent's turn too. The
-/// native side can't reach the session, so the app cancels every turn running
-/// on the local engine (phone control only drives the local engine). Kept
-/// alive by the home shell.
+/// An explicit phone-task stop can end its agent turn too. iOS reports the
+/// exact owning session; platforms without that contract use the local list.
 final phoneStopWatcherProvider = Provider<void>((ref) {
   final channel = ref.watch(phoneChannelProvider);
+  final ios = ref.watch(operatingSystemProvider) == 'ios';
   StreamSubscription<PhoneStatus>? sub;
   var disposed = false;
   ref.onDispose(() {
@@ -402,7 +402,17 @@ final phoneStopWatcherProvider = Provider<void>((ref) {
     if (disposed || !status.ready) return;
     var stopped = status.task.stopped;
     sub = channel.statusChanges.listen((s) {
-      if (s.task.stopped && !stopped) unawaited(_cancelLocalTurns(ref));
+      if (s.task.stopped && !stopped) {
+        if (ios) {
+          final owner = s.task.ownerSessionId;
+          final client = ref.read(localConnectionProvider).value?.client;
+          if (owner != null && owner.isNotEmpty && client != null) {
+            unawaited(client.cancel(owner).catchError((Object _) {}));
+          }
+        } else {
+          unawaited(_cancelLocalTurns(ref));
+        }
+      }
       stopped = s.task.stopped;
     }, onError: (_) {});
   }());

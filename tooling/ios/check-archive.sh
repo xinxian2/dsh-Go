@@ -16,7 +16,7 @@ bash tooling/ios/build-phone-self-runner.sh || { fail 'phone native library prep
 
 archive="$RUNNER_TEMP/Runner.xcarchive"
 log="$(mktemp)"
-(cd app && flutter build ios --release --no-codesign --config-only) >"$log" 2>&1 || {
+(cd app && flutter build ios --release --no-codesign --config-only "$@") >"$log" 2>&1 || {
   tail -20 "$log"
   fail "flutter couldn't write the configuration: $(tail -3 "$log")"
   exit 1

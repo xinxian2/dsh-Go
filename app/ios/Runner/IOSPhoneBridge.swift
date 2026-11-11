@@ -131,14 +131,17 @@ final class IOSPhoneBridge: NSObject, URLSessionTaskDelegate {
       "launched": launched, "current": true]
   }
 
-  func stopPhoneTask() {
+  func stopPhoneTask(byUser: Bool) {
     if let request = active, request.action.kind.hasPrefix("runner-") {
       operation?.cancel(); operation = nil
       actions.cancel(request.id)
       active = nil
       Task { [weak self] in
         guard let self, self.runId == request.runId else { return }
-        _ = try? await self.post("result", ["id": request.id, "text": "用户停止了手机操控。不要重试。", "isError": true])
+        let text = byUser
+          ? "用户停止了手机操控。不要重试。"
+          : "手机操控授权已失效。已停止此手机操作，不要自动重试。"
+        _ = try? await self.post("result", ["id": request.id, "text": text, "isError": true])
       }
     }
     runner.retire()
@@ -346,7 +349,7 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
   var enabled: Bool { UserDefaults.standard.object(forKey: "dsh.ios.phone.enabled") as? Bool ?? true }
   var hasActivePhoneTask: Bool { active }
   var isPaused: Bool { paused }
-  func revokePhoneTask() { stop() }
+  func revokePhoneTask() { stop(byUser: false) }
   func pausePhoneTask(id: Int) {
     guard id == taskID, active, !paused else { return }
     paused = true; requestID = nil
@@ -360,7 +363,7 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
     IOSPetOverlay.shared.updatePhoneTask(id: id, line: "等待下一次确认")
     emit()
   }
-  func stopPhoneTaskConfirmed(id: Int) { if id == taskID, active { stop() } }
+  func stopPhoneTaskConfirmed(id: Int) { if id == taskID, active { stop(byUser: true) } }
 
   func register(messenger: any FlutterBinaryMessenger) {
     methods = FlutterMethodChannel(name: "dsh/phone", binaryMessenger: messenger)
@@ -373,9 +376,11 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
       case "setEnabled":
         guard let value = args["enabled"] as? Bool else { return result(false) }
         UserDefaults.standard.set(value, forKey: "dsh.ios.phone.enabled")
-        if !value { self.stop() }
+        if !value { self.revokePhoneTask() }
         self.emit(); result(true)
-      case "stopTask": self.stop(); result(true)
+      case "stopTask":
+        if self.active { self.stop(byUser: true) }
+        result(true)
       case "finishTask":
         guard let id = args["taskId"] as? Int, id == self.taskID, self.active,
           let owner = self.owner,
@@ -441,9 +446,12 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
     self.bridge = nil
     emit()
   }
-  private func stop() {
-    bridge?.stopPhoneTask()
-    active = false; stopped = true; finishing = false; paused = false; requestID = nil
+  private func stop(byUser: Bool) {
+    let cancelTurn = byUser && active
+    bridge?.stopPhoneTask(byUser: cancelTurn)
+    // Locking the device revokes phone access. Only an explicit Stop on an
+    // active phone task may ask Flutter to cancel its owning conversation.
+    active = false; stopped = cancelTurn; finishing = false; paused = false; requestID = nil
     IOSPetOverlay.shared.endPhoneTask(id: taskID)
     emit()
   }

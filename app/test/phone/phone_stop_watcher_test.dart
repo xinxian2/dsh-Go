@@ -1,3 +1,4 @@
+import 'package:dsh_app/state/android_features.dart';
 import 'package:dsh_app/state/connection_state.dart';
 import 'package:dsh_app/state/phone_state.dart';
 import 'package:dsh_client/dsh_client.dart';
@@ -52,6 +53,31 @@ void main() {
     native.push(phoneStatus(taskActive: false, taskStopped: true));
     await pumpEventQueue();
     expect(client.cancelled, ['busy']);
+  });
+
+  test('iOS lock revocation and ownerless stops do not cancel other turns', () async {
+    final native = FakePhoneNative(status: phoneStatus(taskActive: true))..install();
+    final client = _Client();
+    final container = ProviderContainer(overrides: [
+      operatingSystemProvider.overrideWithValue('ios'),
+      localConnectionProvider.overrideWith(() => _Local(client)),
+    ]);
+    addTearDown(container.dispose);
+    await container.read(localConnectionProvider.future);
+    container.listen(phoneStopWatcherProvider, (_, _) {});
+    await pumpEventQueue();
+
+    native.push(phoneStatus());
+    native.push(phoneStatus(taskStopped: true));
+    await pumpEventQueue();
+    expect(client.cancelled, isEmpty);
+
+    native.push(phoneStatus(taskActive: true));
+    final explicitStop = phoneStatus(taskStopped: true);
+    (explicitStop['task'] as Map<String, Object?>)['ownerSessionId'] = 'phone-owner';
+    native.push(explicitStop);
+    await pumpEventQueue();
+    expect(client.cancelled, ['phone-owner']);
   });
 
   test('without the native side nothing is watched', () async {
