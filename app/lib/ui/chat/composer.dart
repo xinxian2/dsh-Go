@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
@@ -578,14 +579,26 @@ class _ComposerGlass extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final open = this.open;
-    if (open == null) return GlassSurface(tier: GlassTier.chrome, borderRadius: AppShape.radiusXl, child: child);
+    final ios = defaultTargetPlatform == TargetPlatform.iOS;
+    final collapsed = ios ? const BorderRadius.all(Radius.circular(26)) : AppShape.radiusXl;
+
+    Widget frame(BorderRadius radius, Widget child) {
+      if (!ios) return GlassSurface(tier: GlassTier.chrome, borderRadius: radius, child: child);
+      final colors = Theme.of(context).colorScheme;
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: colors.surfaceContainerLow,
+          borderRadius: radius,
+          border: Border.all(color: colors.outlineVariant),
+        ),
+        child: child,
+      );
+    }
+
+    if (open == null) return frame(collapsed, child);
     return AnimatedBuilder(
       animation: open,
-      builder: (context, child) => GlassSurface(
-        tier: GlassTier.chrome,
-        borderRadius: BorderRadius.lerp(AppShape.radiusXl, _opened, open.value),
-        child: child,
-      ),
+      builder: (context, child) => frame(BorderRadius.lerp(collapsed, _opened, open.value)!, child!),
       child: child,
     );
   }
