@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart' show AppLifecycleListener;
@@ -61,12 +62,14 @@ class AppearanceController extends Notifier<AppearanceSettings> {
   /// (`DynamicColorPlugin.kt` 的 `ThemeAccent`)。
   static const notifyColorKey = 'appearance.notify_color';
 
+  static String get _defaultPresetId => Platform.isIOS ? AppAccent.graphite.id : AppAccent.mist.id;
+
   late Future<void> _loaded;
 
   @override
   AppearanceSettings build() {
     _loaded = _load();
-    return const AppearanceSettings();
+    return AppearanceSettings(presetId: _defaultPresetId);
   }
 
   Future<void> _load() async {
@@ -75,7 +78,7 @@ class AppearanceController extends Notifier<AppearanceSettings> {
       final source = AccentSource.values.asNameMap()[prefs.getString(_sourceKey)] ?? AccentSource.preset;
       state = AppearanceSettings(
         source: source,
-        presetId: AppAccent.preset(prefs.getString(_presetKey)).id,
+        presetId: AppAccent.preset(prefs.getString(_presetKey) ?? _defaultPresetId).id,
         customColor: prefs.getInt(_customKey) ?? AppearanceSettings.defaultCustom,
         loaded: true,
       );
