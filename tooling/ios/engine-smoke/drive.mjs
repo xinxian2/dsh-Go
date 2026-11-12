@@ -187,6 +187,45 @@ async function login(ready) {
   return { cookie, rpc };
 }
 
+async function checkMarket(ready) {
+  report.stage = 'market-capabilities';
+  const { cookie, rpc } = await login(ready);
+  const capabilities = await exchange(new URL('/dsh-go/v1/runtime-capabilities', ready.baseUrl), { cookie });
+  if (capabilities.status !== 200 || JSON.parse(capabilities.text).plugins.marketInstall !== 'supported') {
+    fail('embedded engine did not advertise market installation');
+  }
+  const name = '@ccch1mneyyy/dsh-media';
+  const spec = name + '@0.3.1';
+  report.stage = 'market-inspect';
+  const inspection = await rpc('pluginManager/inspect', { spec });
+  if (inspection.status !== 'accepted' || inspection.version !== '0.3.1' || !inspection.bundle) {
+    fail('market inspection failed: ' + JSON.stringify(inspection));
+  }
+  report.stage = 'market-install';
+  const installed = await rpc('pluginManager/installBundle', {
+    spec, options: { requestId: randomUUID(), saveExact: true },
+  });
+  if (installed.application === 'failed' || installed.version !== '0.3.1') {
+    fail('market install failed: ' + JSON.stringify(installed));
+  }
+  const bundles = await rpc('pluginManager/listBundles');
+  if (!bundles.some(bundle => bundle.name === name && bundle.installed && bundle.enabled)) {
+    fail('market bundle was not installed and selected');
+  }
+  if (installed.application === 'applied') {
+    const plugins = await rpc('pluginManager/listPlugins');
+    if (!plugins.some(plugin => plugin.moduleName === name && plugin.fiberPhase === 'active')) {
+      fail('market bundle was selected without an active plugin');
+    }
+  }
+  report.stage = 'market-remove';
+  const removed = await rpc('pluginManager/removeBundle', { name });
+  if (removed.application === 'failed' || (await rpc('pluginManager/listBundles')).some(bundle => bundle.name === name && bundle.installed)) {
+    fail('market removal failed: ' + JSON.stringify(removed));
+  }
+  report.market = { version: installed.version, application: installed.application, removal: removed.application };
+}
+
 async function round(ready, { mode = 'normal', restore, resume = false } = {}) {
   const { cookie, rpc } = await login(ready);
   const frames = [];
@@ -319,6 +358,7 @@ try {
   const first = await waitReady(0, 240000);
   engineEnded = null;
   report.readyMs = Date.now() - startedAt;
+  await checkMarket(first);
   const completedSession = await round(first);
   await round(first, { mode: 'cancel' });
   report.status = 'ROUND_PASSED';

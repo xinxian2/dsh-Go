@@ -14,6 +14,7 @@ OUT="$ROOT/app/ios/Engine"
 WORK="${DSH_IOS_ENGINE_WORK:-$HOME/Library/Caches/dsh-ios-engine}"
 
 NODE_VERSION=24.22.1
+IOS_NPM_VERSION=11.9.0
 NODE_MOBILE_URL=https://github.com/fogtape/nodejs-mobile/releases/download/v24.22.1-0/nodejs-mobile-ios-24.22.1-0.zip
 NODE_MOBILE_SHA256=3fa1b8fb0720768b01c2e0dae3a17e788476e8c1613a1d9a54e206793b45326e
 ADDON_COMMIT=a58d3599a2e551d7d706d1ff796c9fd4bbaff63c
@@ -108,8 +109,11 @@ REGEX="$(find "$PROCESS/build" -name 're2js-unicode.mjs' | head -1)"
   --regex-artifact "$REGEX" --esbuild-prefix "$TOOLS" --imports-report "$STEP/imports.json" \
   --node "$NODE" --runtime-core "$ROOT/app/ohos/entry/src/main/ets/runtime/RuntimeCore.ets" \
   --out "$STEP/composed" --keep-expanded
+# npm uses Node HTTP on the embedded engine without a WASM parser. Verify the tarball in the specializer.
+NPM_TARBALL="$STEP/npm.tgz"
+curl -fsSL --retry 3 -o "$NPM_TARBALL" "https://registry.npmjs.org/npm/-/npm-$IOS_NPM_VERSION.tgz"
 "$PYTHON" -I -B "$ROOT/tooling/ios/specialize-runtime.py" \
-  --expanded "$STEP/composed/expanded/dsh-runtime" --out "$STEP/ios-composed"
+  --expanded "$STEP/composed/expanded/dsh-runtime" --out "$STEP/ios-composed" --npm-tarball "$NPM_TARBALL"
 ARCHIVE="$STEP/ios-composed/runtime.zip"
 [[ -f "$ARCHIVE" ]] || { printf 'Composition did not produce runtime.zip\n' >&2; exit 1; }
 

@@ -112,6 +112,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
       DSH_IOS_ENGINE_WORK: ${{ github.workspace }}/../engine-work
+      IOS_TEST_VERSION: 1.0.14
       FLUTTER_VERSION: 3.47.7
       FLUTTER_SHA256: dd9da574c3168460550117eb0e8dd0313ae934fabf64a82a6d557fff5fd1422e
     steps:
@@ -350,7 +351,7 @@ jobs:
       - name: Archive as for TestFlight, and look inside
         id: archive
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
-        run: bash tooling/ios/check-archive.sh --build-name=1.0.13 --build-number="$GITHUB_RUN_NUMBER"
+        run: bash tooling/ios/check-archive.sh --build-name="$IOS_TEST_VERSION" --build-number="$GITHUB_RUN_NUMBER"
 
       - name: Verify the version and build number in the IPA
         id: ipa-version
@@ -358,7 +359,7 @@ jobs:
         run: |
           plist="$RUNNER_TEMP/ipa-version.plist"
           unzip -p "$RUNNER_TEMP/DSH-Go-unsigned.ipa" 'Payload/*.app/Info.plist' > "$plist"
-          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")" = "1.0.13"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")" = "$IOS_TEST_VERSION"
           test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$plist")" = "$GITHUB_RUN_NUMBER"
 
       - name: Keep the unsigned app

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Build the iOS runtime from verified shared composition, without editing its inputs."""
 import argparse
+import base64
+import io
 import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import shutil
 import tempfile
+import tarfile
 
 HELPER = 'runtime/ohos/process/build/just-bash/chunks/chunk-GN6CQ3J4.js'
 PROVENANCE = 'runtime/ohos/process/build/just-bash/PROVENANCE.json'
@@ -21,6 +24,11 @@ AFTER = 'let e=y.encode(t),o=[];for(let r=0;r<e.length;r+=8192)o.push(String.fro
 # write WebP, so alpha stays in PNG. Each has to match exactly once, or the build stops.
 ATTACHMENTS = 'node_modules/@deepseek-ai/dsh-attachment-local/lib/index.js'
 IMAGE_CODEC = 'node_modules/@deepseek-ai/dsh-attachment-local/lib/ios-sharp.cjs'
+PLUGIN_MANAGER = 'node_modules/@deepseek-ai/dsh-plugin-manager/lib/index.js'
+PLUGIN_CAPABILITIES = 'runtime/ohos/capabilities/snapshot.mjs'
+PLUGIN_FILES = ('runtime/ios/plugins/package-manager.mjs', 'runtime/ios/plugins/package-worker.mjs')
+NPM_PREFIX = 'runtime/ios/plugins/npm/'
+NPM_SHA512 = 'BBZoU926FCypj4b7V7ElinxsWcy4Kss88UG3ejFYmKyq7Uc5XnT34Me2nEhgCOaL5qY4HvGu5aI92C4OYd7NaA=='
 WORKER_ENV = 'runtime/ios/process/worker-env.mjs'
 PRELOAD = 'runtime/ohos/preload.mjs'
 RELOCATION_FILES = ('runtime/ios/storage/relocate.mjs', 'runtime/ios/storage/preload.mjs')
@@ -218,7 +226,68 @@ def diagnostics_for_ios(name, original):
     return data
 
 
-def specialize(expanded, out, composer):
+def plugin_manager_for_ios(original):
+    text = original.decode()
+    edits = (
+        ('import { execa } from "execa";',
+         'import { execa } from "execa";\n'
+         'import { packageManagerAvailable, registryOnlyMessage, runPackageManager } from '
+         '"../../../../runtime/ios/plugins/package-manager.mjs";'),
+        ('process.platform === "openharmony"', '!packageManagerAvailable', 5),
+        ('execa(options.command ?? "pnpm",', 'runPackageManager(options.command ?? "pnpm",', 5),
+        ('const grouped = leadsOwnGroup(options.execution);', 'const grouped = false;'),
+        ('pnpm-lock.yaml', 'package-lock.json', 6),
+        ('if (options?.approvedBuilds !== void 0) {\n'
+         '\t\t\t\t\tawait approveBuilds(this.profile.dir, options.approvedBuilds);\n'
+         '\t\t\t\t\tresult.approvedBuilds = options.approvedBuilds;\n\t\t\t\t}',
+         'if (options?.approvedBuilds?.length) throw new Error("iOS 本机不会执行 npm 安装脚本。");'),
+        ('switch (parsed.kind) {\n\t\t\t\tcase "git": return {',
+         'if (parsed.kind !== "registry") return refused("invalid-spec", registryOnlyMessage);\n'
+         '\t\t\tswitch (parsed.kind) {\n\t\t\t\tcase "git": return {'),
+        ('const parsed = parsedForRegistry(spec);\n\t\t\t\t\tconst signal',
+         'const parsed = parsedForRegistry(spec);\n'
+         '\t\t\t\t\tif (parsed?.kind !== "registry") throw new Error(registryOnlyMessage);\n'
+         '\t\t\t\t\tconst signal'),
+    )
+    for before, after, *expected in edits:
+        if text.count(before) != (expected[0] if expected else 1):
+            raise ValueError('iOS plugin manager input changed: ' + before[:70])
+        text = text.replace(before, after)
+    return text.encode()
+
+
+def plugin_capabilities_for_ios(original):
+    text = original.decode()
+    before = "marketInstall: 'unsupported'"
+    if text.count(before) != 1:
+        raise ValueError('iOS plugin capability input changed')
+    return ("import { packageManagerAvailable } from '../../ios/plugins/package-manager.mjs';\n" +
+            text.replace(before, "marketInstall: support(packageManagerAvailable && ctx.get('pluginManager') != null)")).encode()
+
+
+def pinned_npm(path):
+    data = path.read_bytes()
+    if base64.b64encode(hashlib.sha512(data).digest()).decode() != NPM_SHA512:
+        raise ValueError('iOS npm tarball integrity mismatch')
+    files = {}
+    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as archive:
+        for member in archive.getmembers():
+            relative = Path(member.name).relative_to('package')
+            if '..' in relative.parts:
+                raise ValueError('iOS npm contains an invalid archive path')
+            if member.isdir():
+                continue
+            if not member.isfile():
+                raise ValueError('iOS npm contains an unsupported archive member')
+            if relative.suffix in ('.node', '.exe'):
+                continue
+            files[NPM_PREFIX + relative.as_posix()] = archive.extractfile(member).read()
+    if any(NPM_PREFIX + name not in files for name in ('bin/npm-cli.js', 'lib/npm.js', 'LICENSE')):
+        raise ValueError('iOS npm runtime is incomplete')
+    return files
+
+
+def specialize(expanded, out, composer, npm):
     expanded = expanded.resolve(strict=True)
     output = out.resolve()
     if output.is_relative_to(expanded) or expanded.is_relative_to(output):
@@ -238,6 +307,9 @@ def specialize(expanded, out, composer):
     for name in DIAGNOSTIC_EDITS:
         data = attachments if name == ATTACHMENTS else (expanded / 'files' / name).read_bytes()
         diagnostics[name] = diagnostics_for_ios(name, data)
+    diagnostics[PLUGIN_MANAGER] = plugin_manager_for_ios(diagnostics[PLUGIN_MANAGER])
+    diagnostics[PLUGIN_CAPABILITIES] = plugin_capabilities_for_ios(
+        (expanded / 'files' / PLUGIN_CAPABILITIES).read_bytes())
     guest_spec = importlib.util.spec_from_file_location('ios_guest_specialization', Path(__file__).with_name('guest-specialization.py'))
     guest = importlib.util.module_from_spec(guest_spec)
     guest_spec.loader.exec_module(guest)
@@ -258,7 +330,8 @@ def specialize(expanded, out, composer):
     codec = (Path(__file__).resolve().parents[2] / 'runtime/ios/image/ios-sharp.cjs').read_bytes()
     worker_env = (Path(__file__).resolve().parents[2] / WORKER_ENV).read_bytes()
     relocation = {name: (Path(__file__).resolve().parents[2] / name).read_bytes()
-                  for name in (*RELOCATION_FILES, *guest.FILES)}
+                  for name in (*RELOCATION_FILES, *guest.FILES, *PLUGIN_FILES)}
+    relocation.update(pinned_npm(npm))
     preload = (expanded / 'files' / PRELOAD).read_text()
     if preload.count(PRELOAD_BEFORE) != 1 or '../ios/storage/preload.mjs' in preload:
         raise ValueError('iOS relocation preload differs from the shared input')
@@ -341,12 +414,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--expanded', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
+    parser.add_argument('--npm-tarball', type=Path, required=True)
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     spec = importlib.util.spec_from_file_location('shared_composition', root / 'runtime/ohos/package/compose-runtime.py')
     composer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(composer)
-    specialize(args.expanded, args.out, composer)
+    specialize(args.expanded, args.out, composer, args.npm_tarball)
 
 
 if __name__ == '__main__':
