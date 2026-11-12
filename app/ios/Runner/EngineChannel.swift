@@ -592,6 +592,9 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
         self.emitStatus()
       }
     }
+    continued.isPictureInPictureKeepingAlive = {
+      MainActor.assumeIsolated { IOSPetOverlay.shared.isKeepingAlive }
+    }
     MainActor.assumeIsolated {
       IOSPetOverlay.shared.onKeepingAliveChanged = { [weak self] active in
         self?.queue.async { [weak self] in

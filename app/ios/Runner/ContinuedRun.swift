@@ -9,6 +9,7 @@ final class ContinuedRun {
   /// Whether the task is running now.
   var onChange: ((Bool) -> Void)?
   var onDiagnostic: ((String) -> Void)?
+  var isPictureInPictureKeepingAlive: (() -> Bool)?
 
   private var wanted = false
   /// The system or the user ended it: not again until the next turn.
@@ -57,8 +58,8 @@ final class ContinuedRun {
     }
     let request = BGContinuedProcessingTaskRequest(
       identifier: identifier,
-      title: String(localized: "DSH Go is working"),
-      subtitle: String(localized: "This conversation is still going"))
+      title: String(localized: "DSH Go background execution"),
+      subtitle: String(localized: "Keeping the local engine available"))
     // Now or not at all: a turn is no use to anyone once it has already paused.
     request.strategy = .fail
     do {
@@ -82,8 +83,12 @@ final class ContinuedRun {
       DispatchQueue.main.async {
         guard let self, let task, self.task === task else { return }
         self.spent = true
-        self.onDiagnostic?("expired")
-        self.finish(success: false)
+        // This task grants execution time. The engine can keep running after
+        // a handoff even though this particular grant is ending.
+        let handedOff = UIApplication.shared.applicationState == .active ||
+          self.isPictureInPictureKeepingAlive?() == true
+        self.onDiagnostic?(handedOff ? "expired_handed_off" : "expired")
+        self.finish(success: handedOff)
       }
     }
     // A turn's length isn't known and the system expects to see progress: this moves and never ends.
