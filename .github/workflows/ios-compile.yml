@@ -352,8 +352,17 @@ jobs:
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
         run: bash tooling/ios/check-archive.sh --build-name=1.0.13 --build-number="$GITHUB_RUN_NUMBER"
 
-      - name: Keep the unsigned app
+      - name: Verify the version and build number in the IPA
+        id: ipa-version
         if: ${{ !cancelled() && steps.archive.outcome == 'success' }}
+        run: |
+          plist="$RUNNER_TEMP/ipa-version.plist"
+          unzip -p "$RUNNER_TEMP/DSH-Go-unsigned.ipa" 'Payload/*.app/Info.plist' > "$plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")" = "1.0.13"
+          test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$plist")" = "$GITHUB_RUN_NUMBER"
+
+      - name: Keep the unsigned app
+        if: ${{ !cancelled() && steps.ipa-version.outcome == 'success' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ios-unsigned-ipa
