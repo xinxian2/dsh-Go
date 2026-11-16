@@ -10,11 +10,15 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../update/checker.dart';
 import '../update/downloader.dart';
 import '../update/installer.dart';
+import '../update/privileged_installer.dart';
 import '../update/release.dart';
 import '../update/update_config.dart';
 import '../update/update_http.dart';
 import '../update/version.dart';
+import '../usage/usage_net.dart' show UsageDeviceChannel;
+import 'android_features.dart' show operatingSystemProvider;
 import 'app_info.dart';
+import 'artifacts.dart';
 
 /// In-app updates: daily check of our release copy and GitHub Releases (with
 /// mirror fallback), a delta patch or the whole APK with resume, SHA-256
@@ -24,6 +28,7 @@ import 'app_info.dart';
 
 final updateHttpProvider = Provider<UpdateHttp>((ref) => IoUpdateHttp());
 final updateInstallerProvider = Provider<UpdateInstaller>((ref) => const ChannelUpdateInstaller());
+final privilegedInstallerProvider = Provider<PrivilegedInstaller>((ref) => const ChannelPrivilegedInstaller());
 final updateSourcesProvider = Provider<UpdateSources>((ref) => defaultUpdateSources());
 final updateClockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
@@ -83,6 +88,7 @@ class AppUpdateState {
     required this.current,
     this.loaded = false,
     this.installable = true,
+    this.noticeOnly = false,
     this.autoCheck = true,
     this.flavor,
     this.check = UpdateCheckPhase.idle,
@@ -95,16 +101,37 @@ class AppUpdateState {
     this.total,
     this.source,
     this.problem,
+    this.apkHere = false,
     this.installedSha256,
     this.patchFailedVersion,
+    this.installRoute = UpdateInstallRoute.system,
+    this.privilegedStatus = const PrivilegedInstallStatus(),
+    this.selfUpdate = const SelfUpdatePending(),
+    this.privilegedErrorCode,
+    this.loadingInstallStatus = false,
   });
 
   /// Preferences were read; nothing automatic runs before that.
   final bool loaded;
 
-  /// False on a build with no APK installer (`dsh/update`): HarmonyOS updates
-  /// come from its app store, so nothing here checks, downloads or offers.
+  /// Whether this build has the APK download and installation path.
   final bool installable;
+
+  /// HarmonyOS checks the feed and offers a release page, never an APK.
+  final bool noticeOnly;
+  bool get checkable => installable || noticeOnly;
+
+  /// The notice can open only a real web page, without embedded credentials.
+  /// A newer feed version alone does not establish an OH installable artifact.
+  Uri? get noticePage {
+    if (!noticeOnly) return null;
+    final page = latest?.pageUrl;
+    if (page == null || (page.scheme != 'https' && page.scheme != 'http') ||
+        page.host.isEmpty || page.userInfo.isNotEmpty) {
+      return null;
+    }
+    return page;
+  }
   final bool autoCheck;
 
   /// Installed version (native versionName + versionCode).
@@ -127,15 +154,27 @@ class AppUpdateState {
   final String? source;
   final UpdateProblem? problem;
 
+  /// The verified download is still here in this session: 「导出安装包」 can copy
+  /// it out for signing by hand. Cleared with the file, and when the offer it
+  /// was downloaded for is replaced.
+  final bool apkHere;
+
   /// SHA-256 of the installed APK, once hashed (only for offers with patches).
   final String? installedSha256;
 
   /// The release whose patch failed: its whole APK is downloaded instead.
   final String? patchFailedVersion;
 
+  final UpdateInstallRoute installRoute;
+  final PrivilegedInstallStatus privilegedStatus;
+  final SelfUpdatePending selfUpdate;
+  final String? privilegedErrorCode;
+  final bool loadingInstallStatus;
+
+  bool get hasSelfUpdateResult => selfUpdate.state != SelfUpdatePendingState.none;
   bool get hasUpdate => latest != null;
   bool get isSkipped => latest != null && skippedVersion == latest!.version.toString();
-  ReleaseAsset? get asset => latest?.apkFor(flavor);
+  ReleaseAsset? get asset => noticeOnly ? null : latest?.apkFor(flavor);
 
   /// What a download fetches in place of [asset]: the patch from the installed
   /// APK, unless one already failed for this release.
@@ -152,11 +191,13 @@ class AppUpdateState {
   double? get progress => total == null || total == 0 ? null : (received / total!).clamp(0.0, 1.0);
 
   bool get busy =>
-      task == UpdateTaskPhase.downloading || task == UpdateTaskPhase.verifying || task == UpdateTaskPhase.installing;
+      task == UpdateTaskPhase.downloading || task == UpdateTaskPhase.verifying ||
+      task == UpdateTaskPhase.installing || selfUpdate.unresolved;
 
   AppUpdateState copyWith({
     bool? loaded,
     bool? installable,
+    bool? noticeOnly,
     bool? autoCheck,
     AppVersion? current,
     ApkFlavor? flavor,
@@ -170,11 +211,18 @@ class AppUpdateState {
     int? Function()? total,
     String? Function()? source,
     UpdateProblem? Function()? problem,
+    bool? apkHere,
     String? installedSha256,
     String? Function()? patchFailedVersion,
+    UpdateInstallRoute? installRoute,
+    PrivilegedInstallStatus? privilegedStatus,
+    SelfUpdatePending? selfUpdate,
+    String? Function()? privilegedErrorCode,
+    bool? loadingInstallStatus,
   }) => AppUpdateState(
     loaded: loaded ?? this.loaded,
     installable: installable ?? this.installable,
+    noticeOnly: noticeOnly ?? this.noticeOnly,
     autoCheck: autoCheck ?? this.autoCheck,
     current: current ?? this.current,
     flavor: flavor ?? this.flavor,
@@ -188,8 +236,14 @@ class AppUpdateState {
     total: total == null ? this.total : total(),
     source: source == null ? this.source : source(),
     problem: problem == null ? this.problem : problem(),
+    apkHere: apkHere ?? this.apkHere,
     installedSha256: installedSha256 ?? this.installedSha256,
     patchFailedVersion: patchFailedVersion == null ? this.patchFailedVersion : patchFailedVersion(),
+    installRoute: installRoute ?? this.installRoute,
+    privilegedStatus: privilegedStatus ?? this.privilegedStatus,
+    selfUpdate: selfUpdate ?? this.selfUpdate,
+    privilegedErrorCode: privilegedErrorCode == null ? this.privilegedErrorCode : privilegedErrorCode(),
+    loadingInstallStatus: loadingInstallStatus ?? this.loadingInstallStatus,
   );
 }
 
@@ -274,6 +328,8 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   CancelToken? _cancel;
   _ReadyApk? _apk;
   Future<String?>? _installedHash;
+  bool _privilegedDispatching = false;
+  int _reconcileRead = 0;
 
   /// Bumped per download and install attempt: a late answer from an abandoned
   /// one, or a check that started before it, can't change what it works on.
@@ -283,7 +339,10 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   /// build and ABI once the native side said them.
   String _userAgent = updaterUserAgent(version: AppInfo.version.split('+').first);
 
+  bool get _noticeOnly => ref.read(operatingSystemProvider) == 'ohos';
+
   UpdateInstaller get _installer => ref.read(updateInstallerProvider);
+  PrivilegedInstaller get _privileged => ref.read(privilegedInstallerProvider);
   UpdateHttp get _http => ref.read(updateHttpProvider);
   DateTime _now() => ref.read(updateClockProvider)();
 
@@ -291,6 +350,13 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   AppUpdateState build() {
     ref.onDispose(() => _cancel?.cancel());
     _loading = _load();
+    if (_noticeOnly) {
+      return AppUpdateState(
+        current: AppVersion.tryParse(AppInfo.version) ?? const AppVersion(0, 0, 0),
+        installable: false,
+        noticeOnly: true,
+      );
+    }
     return AppUpdateState(current: AppVersion.tryParse(AppInfo.version) ?? const AppVersion(0, 0, 0));
   }
 
@@ -303,6 +369,10 @@ class AppUpdateController extends Notifier<AppUpdateState> {
       prefs = await SharedPreferences.getInstance();
     } catch (_) {
       return; // No preferences (widget tests): stay unloaded, nothing automatic.
+    }
+    if (_noticeOnly) {
+      await _loadNotice(prefs);
+      return;
     }
     InstalledApp? app;
     var installable = true;
@@ -347,7 +417,164 @@ class AppUpdateController extends Notifier<AppUpdateState> {
       check: latest != null ? UpdateCheckPhase.available : UpdateCheckPhase.idle,
       patchFailedVersion: () => prefs.getString(_patchFailedKey),
     );
-    unawaited(_hashIfPatched());
+    // No APK installer on this build: there is no self-update journal to read.
+    if (installable) await reconcileSelfUpdate();
+    if (ref.mounted) unawaited(_hashIfPatched());
+  }
+
+  void selectInstallRoute(UpdateInstallRoute route) {
+    if (_noticeOnly) return;
+    if (state.busy || state.loadingInstallStatus) return;
+    state = state.copyWith(installRoute: route, privilegedErrorCode: () => null);
+    if (route != UpdateInstallRoute.system) unawaited(refreshInstallStatus());
+  }
+
+  Future<void> refreshInstallStatus() async {
+    if (_noticeOnly || state.loadingInstallStatus) return;
+    state = state.copyWith(loadingInstallStatus: true);
+    try {
+      final status = await _privileged.status();
+      if (ref.mounted) state = state.copyWith(privilegedStatus: status, privilegedErrorCode: () => status.errorCode);
+    } catch (_) {
+      if (ref.mounted) state = state.copyWith(privilegedErrorCode: () => 'nativeUnavailable');
+    } finally {
+      if (ref.mounted) state = state.copyWith(loadingInstallStatus: false);
+    }
+  }
+
+  Future<void> requestUpdateShizukuPermission() async {
+    if (_noticeOnly) return;
+    if (state.busy || state.loadingInstallStatus) return;
+    state = state.copyWith(loadingInstallStatus: true, privilegedErrorCode: () => null);
+    var granted = false;
+    try {
+      granted = await _privileged.requestShizukuPermission();
+    } catch (_) {} finally {
+      if (ref.mounted) state = state.copyWith(loadingInstallStatus: false);
+    }
+    if (!ref.mounted) return;
+    await refreshInstallStatus();
+    if (ref.mounted && !granted) state = state.copyWith(privilegedErrorCode: () => 'permissionRequired');
+  }
+
+  /// Only native confirmation can clear an inactive unknown journal. This is
+  /// not cancellation of a system install and never starts another attempt.
+  Future<void> acknowledgeUnknownSelfUpdate() async {
+    if (_privilegedDispatching || state.loadingInstallStatus ||
+        state.selfUpdate.state != SelfUpdatePendingState.unknown || !state.selfUpdate.canAcknowledge) {
+      return;
+    }
+    final run = _run;
+    state = state.copyWith(loadingInstallStatus: true);
+    try {
+      final pending = await _privileged.acknowledgeUnknown();
+      if (!ref.mounted || run != _run) return;
+      if (pending.state == SelfUpdatePendingState.none) {
+        _run++;
+        _reconcileRead++;
+        state = state.copyWith(
+          selfUpdate: pending, task: _apk?.isFor(state) == true ? UpdateTaskPhase.ready : UpdateTaskPhase.idle,
+          problem: () => null, privilegedErrorCode: () => null,
+        );
+      }
+    } catch (_) {
+      // Denial or missing native confirmation leaves the unresolved state.
+    } finally {
+      if (ref.mounted) state = state.copyWith(loadingInstallStatus: false);
+    }
+  }
+
+  /// Read only. Missing/ambiguous evidence never unlocks replay of a dispatched
+  /// attempt, and a successful RPC alone is not installation success.
+  Future<void> reconcileSelfUpdate() async {
+    final read = ++_reconcileRead;
+    final run = _run;
+    SelfUpdatePending pending;
+    try {
+      pending = await _privileged.reconcile();
+    } catch (_) {
+      return;
+    }
+    if (!ref.mounted || read != _reconcileRead || run != _run || pending.state == SelfUpdatePendingState.none) return;
+    // A resume during native confirmation may still see the previous journal.
+    // Wait for this RPC's result before accepting terminal evidence.
+    if (_privilegedDispatching && !pending.unresolved) return;
+    if (pending.verified) {
+      try {
+        final app = await _installer.installedApp();
+        if (!ref.mounted || read != _reconcileRead || run != _run) return;
+        final code = app.versionCode;
+        final target = pending.versionCode;
+        final verified = code != null && target != null &&
+            (pending.state == SelfUpdatePendingState.installed ? code == target : code > target);
+        if (verified) {
+          _run++;
+          _apk = null;
+          final current = AppVersion.tryParse(app.versionName)?.withBuild(code) ?? state.current.withBuild(code);
+          final latest = state.latest;
+          final keepOffer = latest != null && latest.version.isNewerThan(current);
+          state = state.copyWith(
+            current: current, selfUpdate: pending, task: UpdateTaskPhase.idle,
+            latest: () => keepOffer ? latest : null,
+            check: keepOffer ? UpdateCheckPhase.available : UpdateCheckPhase.upToDate,
+            problem: () => null, privilegedErrorCode: () => null, apkHere: false,
+          );
+          if (!keepOffer) unawaited(_prefs?.remove(_latestKey));
+          return;
+        }
+      } catch (_) {}
+      pending = SelfUpdatePending(
+        state: SelfUpdatePendingState.unknown, backend: pending.backend,
+        versionCode: pending.versionCode, errorCode: 'outcomeUnknown',
+      );
+    }
+    if (!ref.mounted || read != _reconcileRead || run != _run) return;
+    state = state.copyWith(
+      selfUpdate: pending,
+      installRoute: pending.backend,
+      task: pending.unresolved ? UpdateTaskPhase.installing : UpdateTaskPhase.failed,
+      problem: () => pending.unresolved ? null : UpdateProblem.installFailed,
+      privilegedErrorCode: () => pending.errorCode,
+    );
+  }
+
+  Future<void> _loadNotice(SharedPreferences prefs) async {
+    var current = state.current;
+    try {
+      // Device facts only: this does not start the usage statistics controller.
+      final device = await const UsageDeviceChannel().read();
+      final version = AppVersion.tryParse(device.app);
+      if (version != null) {
+        // The existing channel uses zero when the native versionCode is absent.
+        // Keep the compiled build on that fallback instead of inventing build 0.
+        current = device.build > 0
+            ? version.withBuild(device.build)
+            : version.name == current.name ? current : version;
+      }
+    } catch (_) {
+      // A device-facts failure does not disable checking the configured feed.
+    }
+    if (!ref.mounted) return;
+    _prefs = prefs;
+    ReleaseInfo? cached;
+    try {
+      final raw = prefs.getString(_latestKey);
+      if (raw != null) cached = parseUpdateManifest(jsonDecode(raw));
+    } catch (_) {}
+    final latest = cached != null && cached.version.isNewerThan(current) ? cached : null;
+    if (latest == null) unawaited(prefs.remove(_latestKey));
+    final checked = prefs.getInt(_checkedKey);
+    state = state.copyWith(
+      loaded: true,
+      installable: false,
+      noticeOnly: true,
+      current: current,
+      autoCheck: prefs.getBool(_autoKey) ?? true,
+      skippedVersion: () => prefs.getString(_skippedKey),
+      lastCheckedAt: checked == null ? null : DateTime.fromMillisecondsSinceEpoch(checked),
+      latest: () => latest,
+      check: latest != null ? UpdateCheckPhase.available : UpdateCheckPhase.idle,
+    );
   }
 
   Future<void> _cleanDownloads() async {
@@ -360,6 +587,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   /// Hashes the installed APK when the offer has patches for this device, so
   /// the sheet can tell which applies (and say its size).
   Future<void> _hashIfPatched() async {
+    if (_noticeOnly) return;
     if (state.latest?.patches[state.flavor]?.isNotEmpty ?? false) await _installedSha256();
   }
 
@@ -393,7 +621,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   Future<bool> autoCheckIfDue() async {
     await ready;
     final prefs = _prefs;
-    if (!ref.mounted || prefs == null || !state.installable || !state.autoCheck || state.busy) return false;
+    if (!ref.mounted || prefs == null || !state.checkable || !state.autoCheck || state.busy) return false;
     DateTime? at(String key) {
       final ms = prefs.getInt(key);
       return ms == null ? null : DateTime.fromMillisecondsSinceEpoch(ms);
@@ -401,14 +629,16 @@ class AppUpdateController extends Notifier<AppUpdateState> {
 
     if (!isAutoCheckDue(now: _now(), lastChecked: at(_checkedKey), lastAttempt: at(_attemptKey))) return false;
     await check();
-    return ref.mounted && state.hasUpdate && !state.isSkipped && state.asset != null;
+    // Switched off while the check was in flight: keep the result, skip the offer.
+    return ref.mounted && state.autoCheck && state.hasUpdate && !state.isSkipped &&
+        (state.noticeOnly ? state.noticePage != null : state.asset != null);
   }
 
   /// Asks the sources for the latest release. Concurrent calls share one check;
   /// a running download keeps its release.
   Future<UpdateCheckPhase> check() async {
     await ready;
-    if (!ref.mounted || !state.installable) return UpdateCheckPhase.idle;
+    if (!ref.mounted || !state.checkable) return UpdateCheckPhase.idle;
     if (state.busy) return state.check;
     return _checking ??= _check().whenComplete(() => _checking = null);
   }
@@ -451,6 +681,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
           lastCheckedAt: now,
           task: changed ? UpdateTaskPhase.idle : null,
           problem: changed ? () => null : null,
+          apkHere: changed ? false : null,
         );
         if (answer == _Answer.conflict) await _conflicted();
         // Before the offer shows: its size is the patch's when one applies.
@@ -506,7 +737,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
     _apk = null;
     // Busy while the file goes, so 「重试」 can't download to the same path
     // meanwhile and meet the delete.
-    state = state.copyWith(task: UpdateTaskPhase.verifying, problem: () => null);
+    state = state.copyWith(task: UpdateTaskPhase.verifying, problem: () => null, apkHere: false);
     await _deleteQuietly(apk.file);
     if (ref.mounted && run == _run) {
       state = state.copyWith(task: UpdateTaskPhase.failed, problem: () => UpdateProblem.checksum);
@@ -553,6 +784,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   // ── Download ───────────────────────────────────────────────────────────────
 
   Future<void> startDownload() async {
+    if (_noticeOnly) return;
     await ready;
     final release = state.latest;
     final asset = state.asset;
@@ -563,10 +795,13 @@ class AppUpdateController extends Notifier<AppUpdateState> {
     _apk = null;
     state = state.copyWith(
       task: UpdateTaskPhase.downloading,
+      apkHere: false,
       received: 0,
       total: () => state.downloadSize,
       source: () => null,
       problem: () => null,
+      selfUpdate: const SelfUpdatePending(),
+      privilegedErrorCode: () => null,
     );
 
     void fail(UpdateProblem problem) {
@@ -687,7 +922,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
       case DownloadDone(:final file, :final from):
         _apk = _ReadyApk(file: file, version: release.version, asset: asset.name, sha256: sha256);
         if (from?.mirrorId case final id?) unawaited(_prefs?.setString(_mirrorKey, id));
-        state = state.copyWith(task: UpdateTaskPhase.ready);
+        state = state.copyWith(task: UpdateTaskPhase.ready, apkHere: true);
       case DownloadCancelled():
         state = state.copyWith(task: UpdateTaskPhase.idle, received: 0);
       case DownloadFailed(:final failure):
@@ -703,10 +938,12 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   void cancelDownload() => _cancel?.cancel();
 
   /// 「重试」: install again when the APK is already here, else resume the download.
-  Future<void> retry() async {
+  Future<void> retry({int? port}) async {
+    if (_noticeOnly) return;
+    if (state.busy) return;
     final apk = _apk;
     if (apk != null && await apk.file.exists()) {
-      await install();
+      await install(route: state.installRoute, port: port);
     } else {
       await startDownload();
     }
@@ -718,19 +955,51 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   /// in the system's own installer. Some OEM builds stop the in-app install
   /// before asking and it reads as cancelled. False when it couldn't open.
   Future<bool> installWithSystem() async {
+    if (_noticeOnly) return false;
     final apk = _apk;
+    final run = _run;
     if (!ref.mounted || apk == null || state.busy || !apk.isFor(state) || !await apk.file.exists()) return false;
+    // The file check can outlive this owner, package or install attempt.
+    if (!ref.mounted || run != _run || state.busy || !identical(_apk, apk) || !apk.isFor(state)) return false;
     return _installer.openWithSystemInstaller(apk.file.path);
   }
 
-  Future<void> install() async {
+  /// 「导出安装包」: copies the verified download into `Download/DSH-Go`, so it can
+  /// be signed and installed by hand — the way out for a phone whose system
+  /// refuses a first install (a vendor block) and whose owner signs it with
+  /// MT Manager or the like.
+  ///
+  /// Returns where it landed (`Download/DSH-Go/dsh-go-1.2.0-arm64.apk`), null
+  /// when there is nothing to copy or the copy failed. A package signed by hand
+  /// is one no later update can cover: the signature check stays, so that phone
+  /// goes on signing and installing every version itself.
+  Future<String?> exportApk() async {
+    if (_noticeOnly) return null;
+    final apk = _apk;
+    if (!ref.mounted || apk == null || state.busy || !apk.isFile(state)) return null;
+    final files = ref.read(filesChannelProvider);
+    try {
+      if (!await apk.file.exists()) return null;
+      return await files.saveToDownloads(
+        apk.file.path,
+        name: apk.asset,
+        mime: 'application/vnd.android.package-archive',
+      );
+    } catch (_) {
+      // FilesChannel: `missing` (gone from the cache) or a refused save.
+      return null;
+    }
+  }
+
+  Future<void> install({UpdateInstallRoute route = UpdateInstallRoute.system, int? port}) async {
+    if (_noticeOnly) return;
     final apk = _apk;
     if (!ref.mounted || apk == null || state.busy) return;
     if (!apk.isFile(state)) {
       // Downloaded for an offer that's no longer on screen: never installed in
       // its place. (The same file under another digest fails below.)
       _apk = null;
-      state = state.copyWith(task: UpdateTaskPhase.idle, problem: () => null);
+      state = state.copyWith(task: UpdateTaskPhase.idle, problem: () => null, apkHere: false);
       return;
     }
     // Taken before the first await, so a second tap or a resume finds it busy.
@@ -738,7 +1007,10 @@ class AppUpdateController extends Notifier<AppUpdateState> {
     // clears [_apk] or deletes the file: an answer, a late exception or a
     // check that was still running all belong to the attempt that replaced it.
     final run = ++_run;
-    state = state.copyWith(task: UpdateTaskPhase.installing, problem: () => null);
+    state = state.copyWith(
+      task: UpdateTaskPhase.installing, problem: () => null, installRoute: route,
+      selfUpdate: const SelfUpdatePending(), privilegedErrorCode: () => null,
+    );
     bool owns() => ref.mounted && run == _run;
     // A file that failed its checks is deleted before the failure shows (the
     // task stays busy meanwhile): 「重试」 then downloads afresh and can't meet
@@ -756,7 +1028,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
         if (!owns()) return;
         if (identical(_apk, apk)) _apk = null;
       }
-      state = state.copyWith(task: UpdateTaskPhase.failed, problem: () => problem);
+      state = state.copyWith(task: UpdateTaskPhase.failed, problem: () => problem, apkHere: discard ? false : null);
     }
 
     // The offer on screen still names this APK's version, file and the digest
@@ -768,7 +1040,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
 
     try {
       if (!bound()) return await conflict();
-      final allowed = await _installer.canRequestInstalls();
+      final allowed = route != UpdateInstallRoute.system || await _installer.canRequestInstalls();
       if (!owns()) return;
       if (!bound()) return await conflict();
       if (!allowed) {
@@ -783,11 +1055,74 @@ class AppUpdateController extends Notifier<AppUpdateState> {
       if (!owns()) return;
       if (!inspection.valid) return await fail(UpdateProblem.invalid, discard: true);
       if (!inspection.samePackage) return await fail(UpdateProblem.notDsh, discard: true);
-      if (inspection.signatureMatches == false) return await fail(UpdateProblem.signature);
+      if (inspection.signatureMatches == false ||
+          route != UpdateInstallRoute.system && inspection.signatureMatches != true) {
+        return await fail(UpdateProblem.signature);
+      }
       if (!apk.isVersion(inspection)) return await fail(UpdateProblem.checksum, discard: true);
       // Last look before the handoff: the digest the bytes were checked
       // against is still the one the offer on screen names.
       if (!bound()) return await conflict();
+      if (route != UpdateInstallRoute.system) {
+        final versionCode = inspection.versionCode;
+        if (versionCode == null || versionCode <= 0 || (state.current.build != null && versionCode <= state.current.build!)) {
+          return await fail(UpdateProblem.downgrade);
+        }
+        _privilegedDispatching = true;
+        final PrivilegedInstallResult result;
+        try {
+          result = await _privileged.install(
+            path: apk.file.path, sha256: apk.sha256, versionCode: versionCode, backend: route, port: port,
+          );
+        } catch (_) {
+          if (owns()) {
+            state = state.copyWith(selfUpdate: SelfUpdatePending(
+              state: SelfUpdatePendingState.unknown, backend: route, versionCode: versionCode, errorCode: 'outcomeUnknown',
+            ));
+          }
+          _privilegedDispatching = false;
+          if (owns()) await reconcileSelfUpdate();
+          return;
+        } finally {
+          _privilegedDispatching = false;
+        }
+        if (!owns()) return;
+        state = state.copyWith(privilegedErrorCode: () => result.errorCode);
+        if (result.outcomeUnknown || result.status == PrivilegedInstallOutcome.unknown ||
+            result.status == PrivilegedInstallOutcome.success) {
+          state = state.copyWith(selfUpdate: SelfUpdatePending(
+            state: SelfUpdatePendingState.unknown, backend: route, versionCode: versionCode, errorCode: result.errorCode,
+          ));
+          await reconcileSelfUpdate();
+          return;
+        }
+        state = state.copyWith(selfUpdate: const SelfUpdatePending());
+        if (!bound()) return await conflict();
+        if (result.status == PrivilegedInstallOutcome.aborted) {
+          state = state.copyWith(task: UpdateTaskPhase.ready, problem: () => UpdateProblem.installCancelled);
+          return;
+        }
+        final preflightProblem = switch (result.errorCode) {
+          'signatureMismatch' => UpdateProblem.signature,
+          'packageMismatch' => UpdateProblem.notDsh,
+          'hashMismatch' || 'sizeMismatch' || 'versionMismatch' => UpdateProblem.checksum,
+          'notNewer' => UpdateProblem.downgrade,
+          'unsupportedAbi' => UpdateProblem.incompatible,
+          'invalidApk' => UpdateProblem.invalid,
+          _ => null,
+        };
+        if (preflightProblem != null) {
+          return await fail(preflightProblem, discard: preflightProblem == UpdateProblem.checksum ||
+              preflightProblem == UpdateProblem.invalid || preflightProblem == UpdateProblem.notDsh);
+        }
+        return await fail(switch (result.status) {
+          PrivilegedInstallOutcome.blocked => UpdateProblem.blocked,
+          PrivilegedInstallOutcome.incompatible => UpdateProblem.incompatible,
+          PrivilegedInstallOutcome.invalid => UpdateProblem.invalid,
+          PrivilegedInstallOutcome.storage => UpdateProblem.noSpace,
+          _ => UpdateProblem.installFailed,
+        });
+      }
       final result = await _installer.install(apk.file.path);
       if (!owns() || state.task != UpdateTaskPhase.installing) return;
       // Handed over under the offer then on screen. Another digest named since
@@ -830,6 +1165,7 @@ class AppUpdateController extends Notifier<AppUpdateState> {
 
   /// Opens the system "install unknown apps" page; [onAppResumed] continues.
   Future<void> requestInstallPermission() async {
+    if (_noticeOnly) return;
     var opened = false;
     try {
       opened = await _installer.openInstallPermission();
@@ -841,6 +1177,17 @@ class AppUpdateController extends Notifier<AppUpdateState> {
   /// was granted), or from the system install dialog. Some ROM installers close
   /// without reporting; after [confirmGrace] the person can try again.
   Future<void> onAppResumed({Duration confirmGrace = const Duration(seconds: 3)}) async {
+    if (_noticeOnly) return;
+    await ready;
+    if (!ref.mounted) return;
+    if (state.selfUpdate.unresolved || state.installRoute != UpdateInstallRoute.system) {
+      if (state.selfUpdate.unresolved || state.task == UpdateTaskPhase.installing) {
+        await reconcileSelfUpdate();
+      } else {
+        await refreshInstallStatus();
+      }
+      return;
+    }
     switch (state.task) {
       case UpdateTaskPhase.needsPermission:
         try {

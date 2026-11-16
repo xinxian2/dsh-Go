@@ -5,7 +5,8 @@ internal object InputProbeDiagnostics {
     enum class Stage(val wire: String) {
         PRECONDITION("precondition"), UI_DISPATCH("ui_dispatch"),
         PRESENTATION_CREATE("presentation_create"), PRESENTATION_CONFIGURE("presentation_configure"),
-        PRESENTATION_SHOW("presentation_show"), VIEW_LAYOUT_WAIT("view_layout_wait"),
+        PRESENTATION_SHOW("presentation_show"), ACTIVITY_START("activity_start"),
+        ACTIVITY_READY_WAIT("activity_ready_wait"), VIEW_LAYOUT_WAIT("view_layout_wait"),
         FRAME_COMMIT_WAIT("frame_commit_wait"), TARGET_VALIDATE("target_validate"),
         INPUT_SEND("input_send"), RECEIPT_WAIT("receipt_wait"), CLEANUP("cleanup"),
     }
@@ -42,24 +43,5 @@ internal object InputProbeDiagnostics {
         if (values[2] !in types) return null
         val elapsed = values[3].toLongOrNull()?.takeIf { it <= 60_000 } ?: return null
         return Observation(stage, values[2], elapsed)
-    }
-
-    /** One existing gate snapshot: last accepted input/receipt facts, not live connectivity or authorization. */
-    fun snapshot(gate: BackgroundGateState.Snapshot): Map<String, Any?> {
-        val base = linkedMapOf<String, Any?>("v" to 1, "observed" to false,
-            "connectionFailure" to (gate.connectionError != null))
-        if (gate.injectOk == true) {
-            base["observed"] = true
-            base["result"] = "success"
-        } else {
-            val failure = decode(gate.gateDetail) ?: return base
-            if (gate.trustedDisplayOk != false && gate.injectOk != false) return base
-            base["observed"] = true
-            base["result"] = "failure"
-            base["stage"] = failure.stage.wire
-            base["exceptionType"] = failure.exceptionType
-            base["elapsedMs"] = failure.elapsedMs
-        }
-        return base
     }
 }

@@ -7,6 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dsh_client/dsh_client.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 
@@ -102,6 +103,15 @@ Future<void> _check() async {
     'nodeScripts': capabilities['nodeScripts'],
     'publication': capabilities['publication'],
   });
+  final firstClient = await _answer('connect chat client', DshClient.connect(baseUri: Uri.parse(firstUrl), token: firstToken));
+  final String sessionId;
+  try {
+    final session = await _answer('create session', firstClient.createSession(cwd: '$root/root/workspace'));
+    sessionId = session.sessionId;
+    await _report('chat session', {'created': sessionId.isNotEmpty});
+  } finally {
+    await firstClient.close();
+  }
   final logs = await _answer('getLogSnapshot', _runtime.invokeMapMethod<Object?, Object?>('getLogSnapshot', {'lines': 50}));
   await _report('logs', {'entries': (logs?['entries'] as List?)?.length, 'through': logs?['throughSeq']});
 
@@ -125,6 +135,14 @@ Future<void> _check() async {
     'oldTokenLogin': stale.status,
     'oldTokenCookie': stale.cookie != null,
   });
+
+  final secondClient = await _answer('reconnect chat client', DshClient.connect(baseUri: Uri.parse(secondUrl), token: secondToken));
+  try {
+    final sessions = await _answer('list sessions after restart', secondClient.listSessions());
+    await _report('chat session after restart', {'found': sessions.any((session) => session.sessionId == sessionId)});
+  } finally {
+    await secondClient.close();
+  }
 
   const performance = MethodChannel('dsh/performance');
   final snapshot = await _answer('snapshot', performance.invokeMapMethod<Object?, Object?>('snapshot'));

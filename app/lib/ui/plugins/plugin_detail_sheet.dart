@@ -28,6 +28,7 @@ import 'native/native_plugin_section.dart';
 import 'plugin_actions.dart';
 import 'plugin_load_status.dart';
 import 'plugin_widgets.dart';
+import 'seats/plugin_seam_controls.dart';
 import 'seats/plugin_web_places.dart';
 
 /// Market entry detail and the install confirmation: what it is, where it
@@ -288,7 +289,8 @@ class MarketPluginSheet extends ConsumerWidget {
       child: Text(l10n.hubPluginManage),
     );
     // Nothing to install or update from here: manage what is there.
-    if (manageable && (status == MarketInstallStatus.installed || host.safeMode || !host.canInstall)) {
+    if (manageable &&
+        (status == MarketInstallStatus.installed || host.safeMode || (!host.canInstall && !installRefused))) {
       return manage();
     }
     // Listed, but this app is too old for it or the engine takes no market
@@ -403,7 +405,8 @@ class BundleSheet extends ConsumerWidget {
     final summary = bundle.summary();
     final error = bundleErrorText(bundle);
     final canSwitch = bundle.readOnlyReason == null && (bundle.installed || bundle.optional) && !gone;
-    final config = ref.watch(pluginConfigProvider).value;
+    final configSource = ref.watch(pluginConfigProvider);
+    final config = configSource.value;
     final configurable = bundleSettingsRows(bundle, config);
     // Every plugin with fields gets its native page; a third-party one
     // without any keeps its config seat (an island page, or DSH Web).
@@ -519,7 +522,17 @@ class BundleSheet extends ConsumerWidget {
                 // A third-party plugin's own config page in DSH Web: its
                 // schema form, its island page, or the way to DSH Web.
                 const SizedBox(height: 16),
-                ListPageCard(margin: EdgeInsets.zero, children: [configSeat]),
+                ListPageCard(
+                  margin: EdgeInsets.zero,
+                  children: [
+                    // Unknown fields are not absent fields: wait for the first
+                    // catalog before offering an alternate settings route.
+                    if (configSource.isLoading && !configSource.hasValue)
+                      ListPageRow(icon: AppIcons.configure, title: l10n.commonSettings, meta: l10n.pluginsLoading)
+                    else
+                      configSeat,
+                  ],
+                ),
               ] else if (configurable.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 ListPageCard(
@@ -571,6 +584,7 @@ class BundleSheet extends ConsumerWidget {
                   NativePluginSection(package: package, named: package != bundle.name),
                   NativePluginPanels(package: package),
                 ],
+              if (!gone) PluginSeamControls(package: bundle.name),
               if (!gone) PluginWebPlacesSection(package: bundle.name, pluginNames: [...?bundle.meta?.title?.all]),
               if (job != null && job.isActive) ...[
                 const SizedBox(height: 16),
@@ -608,6 +622,13 @@ class BundleSheet extends ConsumerWidget {
           child: Text(l10n.hubPluginSafeModeInstall),
         );
       }
+      if (host.installRefused) {
+        return FilledButton(
+          style: FilledButton.styleFrom(minimumSize: size),
+          onPressed: null,
+          child: Text(l10n.marketInstallRefused, maxLines: 1, overflow: TextOverflow.ellipsis),
+        );
+      }
       if (!host.canInstall) {
         return FilledButton.icon(
           style: FilledButton.styleFrom(minimumSize: size),
@@ -639,6 +660,13 @@ class BundleSheet extends ConsumerWidget {
         style: FilledButton.styleFrom(minimumSize: size),
         onPressed: null,
         child: Text(l10n.hubPluginSafeModeRemove),
+      );
+    }
+    if (host.installRefused) {
+      return FilledButton(
+        style: FilledButton.styleFrom(minimumSize: size),
+        onPressed: null,
+        child: Text(l10n.harmonyPluginRemoveRefused, maxLines: 1, overflow: TextOverflow.ellipsis),
       );
     }
     if (!host.canInstall) {

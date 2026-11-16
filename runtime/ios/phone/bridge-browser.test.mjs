@@ -22,7 +22,7 @@ async function fixture(t, options = {}) {
   return { bridge, post, execution };
 }
 
-test('with the app away, only browser actions can be claimed', async t => {
+test('with the app away, ordinary system actions wait for the foreground', async t => {
   const { bridge, post, execution } = await fixture(t);
   const phone = bridge.call('notify', { title: 'a', text: 'b' }, execution);
   assert.equal((await post('/claim', { background: true })).body.request, null);
@@ -36,6 +36,26 @@ test('with the app away, only browser actions can be claimed', async t => {
   assert.equal(front.action.kind, 'notify');
   await post('/result', { id: front.id, text: 'declined', isError: true });
   assert.equal((await phone).isError, true);
+});
+
+test('a task can claim successive runner observations in the background', async t => {
+  const { bridge, post, execution } = await fixture(t);
+  for (let index = 0; index < 2; index++) {
+    const observation = bridge.call('screen', {}, {
+      ...execution, callId: `screen-${index}`,
+    });
+    const claimed = (await post('/claim', { background: true })).body.request;
+    assert.equal(claimed.action.kind, 'runner-call');
+    assert.equal(claimed.action.method, 'screen');
+    assert.equal(claimed.owner.sessionId, execution.agent.session.id);
+    // Claiming still cannot grant permission or report a successful action.
+    assert.equal((await post('/result', {
+      id: claimed.id, text: 'screen', isError: false,
+    })).status, 409);
+    await post('/begin', { id: claimed.id });
+    await post('/result', { id: claimed.id, text: `screen-${index}`, isError: false });
+    assert.equal((await observation).content[0].text, `screen-${index}`);
+  }
 });
 
 test('a page can be far longer than a phone answer, and a phone answer still can\'t', async t => {

@@ -6,5 +6,10 @@
 	<array>
 		<string>group.io.github.ccch1mneyyy.dshgo</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+		<string>$(AppIdentifierPrefix)io.github.ccch1mneyyy.dshgo.companion-widget</string>
+	</array>
 </dict>
 </plist>

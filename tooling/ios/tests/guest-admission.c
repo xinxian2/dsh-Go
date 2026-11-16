@@ -153,6 +153,32 @@ int main(int argc, char **argv) {
   path_join(child, workspace, "../workspace");
   assert(!dsh_admit_workspace(span(child), &blocked, 1, false) && errno == EINVAL);
 
+  // Recursive copy adjusts directory modes. Its descriptor must retain the
+  // readonly policy and must never follow a host symlink to another root.
+  dsh_root *writable = dsh_admit_workspace(span(workspace), &blocked, 1, false);
+  dsh_root *readonly = dsh_admit_workspace(span(workspace), &blocked, 1, true);
+  assert(writable && readonly);
+  assert(!dsh_directory_make(writable, "copy", 4, 0755));
+  dsh_directory *rw = dsh_directory_open(writable, "copy", 4);
+  dsh_directory *ro = dsh_directory_open(readonly, "copy", 4);
+  assert(rw && ro && !dsh_directory_chmod(rw, 0700));
+  assert(dsh_directory_chmod(ro, 0755) < 0 && errno == EROFS);
+  assert(dsh_directory_chmod(rw, 01777) < 0 && errno == EPERM);
+  struct stat copied;
+  assert(!dsh_directory_stat(rw, &copied) && (copied.st_mode & 07777) == 0700);
+  struct timespec times[2] = {{1000, 0}, {2000, 0}};
+  assert(!dsh_directory_times(rw, times));
+  times[1].tv_sec = 3000;
+  assert(dsh_directory_times(ro, times) < 0 && errno == EROFS);
+  assert(!dsh_directory_stat(rw, &copied) && copied.st_mtime == 2000);
+  path_join(child, workspace, "outside-directory");
+  assert(!symlink(protected, child));
+  assert(!dsh_directory_open(writable, "outside-directory", 17));
+  dsh_directory_close(rw);
+  dsh_directory_close(ro);
+  dsh_root_free(writable);
+  dsh_root_free(readonly);
+
   path_join(child, protected, "missing");
   blocked = span(child);
   assert(!dsh_admit_workspace(span(protected), &blocked, 1, false) && errno == EPERM);

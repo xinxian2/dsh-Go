@@ -23,6 +23,26 @@ const { z } = require('zod');
 const { AgentModel, modelSelectionProjectionDefinition } = await import(pathToFileURL(join(deps, 'node_modules/@deepseek-ai/dsh-agent/lib/index.js')));
 const { ToolActivationError } = await import(pathToFileURL(join(deps, 'node_modules/@deepseek-ai/dsh-tools/lib/index.js')));
 const sessionApi = await import(pathToFileURL(join(deps, 'node_modules/@deepseek-ai/dsh-session/lib/index.js')));
+// The companion recall gates (runtime/patches/*-companion-recall-gates.diff)
+// add an import of dshGoRecall to the agent loop; the extracted classes need it
+// in scope. With no recall module registered its gates let everything through.
+// From the dependency tree, else from the patched candidate itself (a separate
+// deps prefix may be an older, unpatched install).
+async function recallBinding() {
+  for (const llm of [
+    join(deps, 'node_modules/@deepseek-ai/dsh-llm/lib/index.js'),
+    resolve(dirname(modulePath), '../../dsh-llm/lib/index.js'),
+  ]) {
+    try {
+      const { dshGoRecall: binding } = await import(pathToFileURL(llm));
+      if (binding !== undefined) return binding;
+    } catch {
+      // Not there: try the next tree.
+    }
+  }
+  throw Error('no patched @deepseek-ai/dsh-llm with dshGoRecall in the deps prefix or beside the candidate');
+}
+const dshGoRecall = await recallBinding();
 
 function region(name) {
   const start = source.indexOf(`//#region lib/types/${name}.js`);
@@ -33,7 +53,7 @@ function region(name) {
 
 class LlmError extends Error {}
 const bindings = {
-  z$1: z, AgentModel, ToolActivationError,
+  z$1: z, AgentModel, ToolActivationError, dshGoRecall,
   agentEvents: (ctx, agent) => { ctx.constructingAgent = agent; return ctx.dispatch; },
   createScope: ctx => ({ ctx }),
   assembleContextFor: (agent, signal) => ({ agent, signal }),
@@ -47,7 +67,10 @@ const bindings = {
   deepFreeze: value => value,
   assertNever: value => { throw Error(`Unexpected ${value}`); },
 };
+// The OHOS agent calls this module-local helper before claiming input.
+const lifecycleHelper = source.match(/^function ohosLifecycle\(\) \{[\s\S]*?^\}/m)?.[0] ?? '';
 const api = Function(...Object.keys(bindings), [
+  lifecycleHelper,
   region('inbox'), region('runtime-context'), region('agent'),
   'return {ReactLoopInbox, ReactLoopAgent, inboxProjectionDefinition};',
 ].join('\n'))(...Object.values(bindings));
@@ -583,3 +606,93 @@ test('successful no-echo consumption from old histories stays consumed; wire sch
   }
   assert.equal(definition.stateVersion, 2);
 });
+
+// OHOS-only integration: the real module helper and coordinator own admission.
+// The existing fixture retains the real ReactLoopAgent/inbox and synthetic LLM.
+if (globalThis[Symbol.for('dsh.go.ohos.sim')] === true) {
+  try {
+    assert.equal(source.match(/^function ohosLifecycle\(\) \{[\s\S]*?^\}/gm)?.length, 1,
+      'OHOS simulation requires the unique real lifecycle helper');
+    const { BoundaryCoordinator, lifecycleSymbol } = await import('../ohos/lifecycle/coordinator.mjs');
+    const { openBoundaryJournal } = await import('../ohos/lifecycle/journal.mjs');
+    const fs = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { setImmediate: nextTurn } = await import('node:timers/promises');
+    const binding = process._linkedBinding('dsh_ohos_publication');
+    async function lifecycleFixture(t, f, directory) {
+      const root = directory ?? await fs.mkdtemp(join(tmpdir(), 'input-lifecycle-'));
+      const journal = await openBoundaryJournal({ directory: root, lockExclusive: binding.lockExclusive });
+      const owner = new BoundaryCoordinator({ journal, bootId: 'input-test',
+        flushSession: async () => true, readEvents: async () => f.log,
+        resolveAgent: id => id === f.session.id ? f.agent : undefined });
+      assert.equal(globalThis[lifecycleSymbol], undefined);
+      globalThis[lifecycleSymbol] = owner;
+      t.after(async () => {
+        delete globalThis[lifecycleSymbol];
+        await owner.close();
+        if (!directory) await fs.rm(root, { recursive: true, force: true });
+      });
+      return { owner, journal, root };
+    }
+    function assertUnclaimed(f, original) {
+      assert.deepEqual(f.agent.inbox.nextTurn, [original]);
+      assert.deepEqual(f.state().inFlight, []);
+      assert.equal(f.counters.assembly, 0);
+      assert.equal(f.log.filter(e => e.type === 'user/message').length, 0);
+      assert.equal(f.log.filter(e => e.type === 'agent/inbox/spliced' && e.data.removedCount).length, 0);
+    }
+    test('OHOS actual background gate keeps input unclaimed until foreground, then admits once', async t => {
+      const f = fixture(), original = message('background', true);
+      const { owner } = await lifecycleFixture(t, f);
+      await owner.observeHost({ revision: 1, foreground: false });
+      f.agent.followup(original); await nextTurn();
+      assertUnclaimed(f, original);
+      await owner.observeHost({ revision: 2, foreground: true });
+      await f.agent.whenIdle();
+      assert.equal(f.counters.assembly, 1);
+      assert.deepEqual(ids(f.log.filter(e => e.type === 'user/message').map(e => e.data)), ['background']);
+      assert.deepEqual(f.agent.inbox.nextTurn, []);
+      await owner.observeHost({ revision: 3, foreground: true });
+      await nextTurn();
+      assert.equal(f.counters.assembly, 1);
+    });
+    test('OHOS actual paused cancellation consumes pending input without resurrection on resume', async t => {
+      const f = fixture(), original = message('cancelled', true);
+      const { owner } = await lifecycleFixture(t, f);
+      await owner.pause(); f.agent.followup(original); await nextTurn();
+      assertUnclaimed(f, original);
+      await owner.cancel(f.session.id); await f.agent.whenIdle();
+      assert.deepEqual(f.agent.inbox.nextTurn, []);
+      assert.equal(f.counters.assembly, 0);
+      assert.deepEqual(cold(f.log).agent.inbox.nextTurn, []);
+      await owner.resume(); await nextTurn();
+      assert.equal(f.counters.assembly, 0, 'resume alone must not restart the cancelled turn');
+      f.agent.followup(message('fresh')); await f.agent.whenIdle();
+      assert.deepEqual(ids(f.log.filter(e => e.type === 'user/message').map(e => e.data)), ['fresh']);
+    });
+    test('OHOS actual closed gate reports its error before claiming input', async t => {
+      const f = fixture(), original = message('closed');
+      const { owner } = await lifecycleFixture(t, f);
+      await owner.close(); f.agent.followup(original); await f.agent.whenIdle();
+      assertUnclaimed(f, original);
+      assert.equal(f.notifications.find(e => e.type === 'agent/error').data.error.code, 'ERR_OHOS_LIFECYCLE_CLOSED');
+    });
+    test('OHOS actual resumed preparation failure cold-recovers original input without duplication', async t => {
+      const f = fixture({ prepareCall: async () => { throw Error('OHOS preparation failed'); } });
+      const original = message('cold', true);
+      const { owner } = await lifecycleFixture(t, f);
+      await owner.pause(); f.agent.followup(original); await nextTurn(); assertUnclaimed(f, original);
+      await owner.resume(); await f.agent.whenIdle();
+      assert.equal(f.counters.preparation, 1);
+      assert.deepEqual(f.agent.inbox.nextTurn, [original]);
+      const recovered = cold(f.log);
+      assert.deepEqual(recovered.agent.inbox.nextTurn, [original]);
+      recovered.agent.wakeDriver(); await recovered.agent.whenIdle();
+      assert.deepEqual(ids(recovered.log.filter(e => e.type === 'user/message').map(e => e.data)), ['cold']);
+      assert.deepEqual(recovered.state().inFlight, []);
+    });
+  } catch (error) {
+    // Node --test-isolation=none can otherwise lose a top-level import failure.
+    test('OHOS lifecycle fixture dependencies initialize', () => { throw error; });
+  }
+}

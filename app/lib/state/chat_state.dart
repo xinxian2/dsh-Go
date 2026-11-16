@@ -164,6 +164,36 @@ class PendingPrompt {
     failureSeq: seq,
   );
 
+  /// Equal prompts publish as equal lists, so the chat keeps its rows (see
+  /// `ChatRowsCache`) while a reply streams with messages waiting.
+  @override
+  bool operator ==(Object other) =>
+      other is PendingPrompt &&
+      other.requestId == requestId &&
+      other.text == text &&
+      other.time == time &&
+      other.mode == mode &&
+      _sameAttachments(other.attachments, attachments) &&
+      other.inboxId == inboxId &&
+      other.slot == slot &&
+      other.resendable == resendable &&
+      other.sourceKind == sourceKind &&
+      other.sourceForm == sourceForm &&
+      other.failureSeq == failureSeq;
+
+  @override
+  int get hashCode =>
+      Object.hash(requestId, text, time, mode, inboxId, slot, resendable, sourceKind, sourceForm, failureSeq);
+
+  static bool _sameAttachments(List<DraftAttachment> a, List<DraftAttachment> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
   PendingPrompt placed(String? inboxId, InboxSlot? slot, {MessageSource? source}) => PendingPrompt(
     requestId: requestId,
     text: text,
@@ -249,6 +279,7 @@ class ChatState {
     this.loading = true,
     this.loadingOlder = false,
     this.error,
+    this.syncError,
     this.defaultModelSaveFailed = false,
     this.notice,
     this.connection,
@@ -285,6 +316,9 @@ class ChatState {
   final bool loading;
   final bool loadingOlder;
   final String? error;
+
+  /// The current history follow failure, separate from action errors.
+  final String? syncError;
 
   /// The session model changed, but remembering it for new chats failed.
   /// Independent of transient send/sync errors; only explicit dismissal or a
@@ -355,6 +389,8 @@ class ChatState {
     bool? loadingOlder,
     String? error,
     bool clearError = false,
+    String? syncError,
+    bool clearSyncError = false,
     bool? defaultModelSaveFailed,
     String? notice,
     bool clearNotice = false,
@@ -377,6 +413,7 @@ class ChatState {
     loading: loading ?? this.loading,
     loadingOlder: loadingOlder ?? this.loadingOlder,
     error: clearError ? null : (error ?? this.error),
+    syncError: clearSyncError ? null : (syncError ?? this.syncError),
     defaultModelSaveFailed: defaultModelSaveFailed ?? this.defaultModelSaveFailed,
     notice: clearNotice ? null : (notice ?? this.notice),
     connection: connection,
@@ -438,6 +475,10 @@ class ChatController extends Notifier<ChatState> {
   Object? _historyRead;
   List<PendingPrompt> _pending = const [];
 
+  /// When this device first saw each inbox item it did not send: a waiting
+  /// prompt keeps one time across publishes (and so stays equal).
+  final _inboxSeen = <String, DateTime>{};
+
   /// Prompts removed elsewhere or consumed by a finished turn: dropped at
   /// the next publish unless they are back by then (「改为插话」 removes,
   /// then adds).
@@ -447,6 +488,11 @@ class ChatController extends Notifier<ChatState> {
   /// A pre-step hook may consume input without writing a user/message echo.
   final _claimedAt = <String, int>{};
   final _retryingFailed = <String>{};
+
+  /// Sends still waiting for the Host to answer the prompt RPC. A prompt
+  /// here may well have landed; anything else with no inbox slot after a
+  /// fresh baseline did not.
+  final _delivering = <String>{};
 
   /// Our prompts taken out of the inbox to be sent again ([_takeOut]): their
   /// bubbles stay, as 「发送中」, until they are back.
@@ -537,6 +583,7 @@ class ChatController extends Notifier<ChatState> {
     _modelChange = null;
     _historyRead = null;
     _moving.clear();
+    _delivering.clear();
     _synchronized = false;
     _syncScope = Object();
     _resyncFuture = null;
@@ -667,7 +714,9 @@ class ChatController extends Notifier<ChatState> {
     if (_syncReady.isCompleted) _syncReady = Completer<bool>();
     _stopTimeout?.cancel();
     _stoppingOperation = null;
-    if (!building) state = state.copyWith(syncing: true, stopping: false, loadingOlder: false);
+    if (!building) {
+      state = state.copyWith(syncing: true, stopping: false, loadingOlder: false, clearSyncError: epoch != null);
+    }
   }
 
   /// A first prompt may arrive immediately after session/create. Wait for the
@@ -794,6 +843,7 @@ class ChatController extends Notifier<ChatState> {
             pulse.observe(event, skew: _sameClock ? Duration.zero : _skew);
             _trackModel(event);
             _trackCommands(event);
+            _countTokens(event);
             final reconcile =
                 (event is InboxSplicedEvent && event.seq > _transcript.cursor) ||
                 (event is SessionSnapshotEvent && event.isResync);
@@ -871,11 +921,8 @@ class ChatController extends Notifier<ChatState> {
               return;
             }
             appErrorLog.record(AppErrorSource.session, e, stack);
-            state = state.copyWith(
-              error: chatErrorText(e, action: appL10n.stateChatSyncInterrupted),
-              streamLost: true,
-              loading: false,
-            );
+            final message = chatErrorText(e, action: appL10n.stateChatSyncInterrupted);
+            state = state.copyWith(error: message, syncError: message, streamLost: true, loading: false);
           },
           onDone: () {
             if (!current()) return;
@@ -1139,6 +1186,23 @@ class ChatController extends Notifier<ChatState> {
       final pendingIds = _pending.map((prompt) => prompt.requestId).toSet();
       _claimedAt.removeWhere((requestId, _) => !pendingIds.contains(requestId));
     }
+    // A fresh baseline that carries the inbox is the Host saying what it
+    // holds. A prompt that is neither there nor echoed, and is not waiting on
+    // its own prompt answer, did not make it: stop showing it as on its way.
+    // A claimed one left the inbox for the agent; its turn end settles it.
+    if (freshSnapshot && _delivering.isEmpty && _pending.isNotEmpty && _transcript.projections.has('inbox')) {
+      final inbox = _inboxIds();
+      _pending = List.unmodifiable([
+        for (final prompt in _pending)
+          if (!prompt.failed &&
+              !_isMoving(prompt.requestId) &&
+              !inbox.contains(prompt.requestId) &&
+              !_claimedAt.containsKey(prompt.requestId))
+            prompt.failedAt(_transcript.cursor)
+          else
+            prompt,
+      ]);
+    }
     final pending = _placePending();
     state = ChatState(
       items: items,
@@ -1154,6 +1218,7 @@ class ChatController extends Notifier<ChatState> {
       loading: false,
       loadingOlder: state.loadingOlder,
       error: freshSnapshot ? null : state.error,
+      syncError: freshSnapshot ? null : state.syncError,
       defaultModelSaveFailed: _defaultModelSaveFailed,
       notice: freshSnapshot ? null : state.notice,
       connection: _transcript.connectionState,
@@ -1176,6 +1241,8 @@ class ChatController extends Notifier<ChatState> {
   /// here may move it.
   List<PendingPrompt> _placePending() {
     final inbox = _transcript.inbox;
+    final inboxIds = {for (final q in inbox) q.id};
+    _inboxSeen.removeWhere((id, _) => !inboxIds.contains(id));
     if (inbox.isEmpty && _moving.isEmpty) return _pending;
     final byRequest = {for (final q in inbox) ?q.requestId: q};
     final ours = {for (final p in _pending) p.requestId};
@@ -1193,7 +1260,7 @@ class ChatController extends Notifier<ChatState> {
           PendingPrompt(
             requestId: q.requestId ?? q.id,
             text: q.text,
-            time: DateTime.now(),
+            time: _inboxSeen.putIfAbsent(q.id, DateTime.now),
             mode: q.steering ? SendMode.steer : SendMode.queue,
             inboxId: q.id,
             slot: slotOf(q),
@@ -1236,16 +1303,31 @@ class ChatController extends Notifier<ChatState> {
   ///
   /// While a turn runs, [mode] picks how the message reaches the agent; when
   /// idle every mode just starts a turn.
-  Future<bool> send(String text, {List<DraftAttachment> attachments = const [], SendMode mode = SendMode.now}) async {
+  ///
+  /// [verbatim] sends [text] exactly as given (trimmed only to decide it is
+  /// empty): the pending bubble, the retry key and the prompt all carry it.
+  /// [beforeDeliver] runs once this send has chosen its request id (a retry of
+  /// an unsettled send keeps the old one) and before anything goes out, for a
+  /// side channel keyed by that id (伙伴小屋's context). Its failure fails the
+  /// send like any other; false drops the send quietly.
+  Future<bool> send(
+    String text, {
+    List<DraftAttachment> attachments = const [],
+    SendMode mode = SendMode.now,
+    bool verbatim = false,
+    Future<bool> Function(String requestId)? beforeDeliver,
+    bool Function()? deliveryAllowed,
+  }) async {
     final client = _client;
     final trimmed = text.trim();
     if (client == null || (trimmed.isEmpty && attachments.isEmpty)) {
       return false;
     }
+    final body = verbatim ? text : trimmed;
     if (!_canControl && (mode == SendMode.interrupt || !await waitForSync())) return false;
     if (!ref.mounted || !identical(client, _client) || !_canControl) return false;
     final operation = _ChatOperation(ref, client, _syncScope);
-    final content = _contentKey(trimmed, attachments);
+    final content = _contentKey(body, attachments);
     final retrying = _unsettled?.content == content;
     final requestId = retrying ? _unsettled!.requestId : _requestId();
     _unsettled = null;
@@ -1255,12 +1337,13 @@ class ChatController extends Notifier<ChatState> {
       ..._pending,
       PendingPrompt(
         requestId: requestId,
-        text: trimmed,
+        text: body,
         time: DateTime.now(),
         mode: effective,
         attachments: List.unmodifiable(attachments),
       ),
     ]);
+    _delivering.add(requestId);
     // A retried request can already be in the log; the Host will not echo it twice.
     if (retrying) _dropEchoed(_transcript.events);
     state = state.copyWith(
@@ -1270,8 +1353,19 @@ class ChatController extends Notifier<ChatState> {
       clearNotice: true,
     );
     try {
+      if (beforeDeliver != null) {
+        final go = await beforeDeliver(requestId);
+        if (!_currentOperation(operation)) return _retireSend(requestId);
+        if (!go) {
+          // The caller let it go (伙伴小屋 left this conversation meanwhile):
+          // nothing went out, so nothing waits and nothing failed.
+          _pending = List.unmodifiable(_pending.where((p) => p.requestId != requestId));
+          state = state.copyWith(pending: _placePending());
+          return false;
+        }
+      }
       final receipts = await _stageFiles(operation, attachments);
-      if (!_currentOperation(operation)) return false;
+      if (!_currentOperation(operation)) return _retireSend(requestId);
       var promptMode = effective == SendMode.steer ? PromptMode.steer : PromptMode.queue;
       String? stopFailed;
       // Interrupt stops first, then sends: DSH keeps the inbox across a stop
@@ -1280,7 +1374,7 @@ class ChatController extends Notifier<ChatState> {
       if (effective == SendMode.interrupt) {
         final stopped = await _stop(operation);
         // Retirement is not a failed cancel: it must never fall back to steer.
-        if (!_currentOperation(operation)) return false;
+        if (!_currentOperation(operation)) return _retireSend(requestId);
         if (!stopped) {
           // The turn goes on: the message joins it instead.
           promptMode = PromptMode.steer;
@@ -1291,13 +1385,21 @@ class ChatController extends Notifier<ChatState> {
           state = state.copyWith(pending: _placePending());
         }
       }
-      final notice = await _deliver(operation, trimmed, attachments, receipts, requestId: requestId, mode: promptMode);
+      final notice = await _deliver(
+        operation,
+        body,
+        attachments,
+        receipts,
+        requestId: requestId,
+        mode: promptMode,
+        deliveryAllowed: deliveryAllowed,
+      );
       _sent();
       if (!_currentOperation(operation)) return false;
       state = state.copyWith(error: stopFailed, notice: notice);
       return true;
     } catch (e) {
-      if (!_currentOperation(operation)) return false;
+      if (!_currentOperation(operation)) return _retireSend(requestId);
       // Durable inbox/claim/end feedback also proves acceptance when a
       // preparation failure never writes a user/message echo.
       if (!_pending.any((p) => p.requestId == requestId) ||
@@ -1315,6 +1417,8 @@ class ChatController extends Notifier<ChatState> {
       _pending = List.unmodifiable(_pending.where((p) => p.requestId != requestId));
       state = state.copyWith(pending: _placePending(), error: _sendFailure(e));
       return false;
+    } finally {
+      _delivering.remove(requestId);
     }
   }
 
@@ -1353,10 +1457,49 @@ class ChatController extends Notifier<ChatState> {
     }
   }
 
+  /// The watch this send was started against is gone (a new follow, another
+  /// Host, a later stop): its answer can no longer be matched to the bubble.
+  /// The optimistic bubble goes with it instead of waiting forever — a Host
+  /// that did take the prompt still echoes it, and a send that never went out
+  /// leaves its text to the screen (「没发出去」 hands it back to the composer).
+  bool _retireSend(String requestId) {
+    if (!ref.mounted) return false;
+    if (_pending.any((p) => p.requestId == requestId)) {
+      _pending = List.unmodifiable(_pending.where((p) => p.requestId != requestId));
+      state = state.copyWith(pending: _placePending());
+    }
+    return false;
+  }
+
+  /// Prompts taken out of the inbox will not be put back (this app stopped
+  /// owning that conversation first): their bubbles go, and the screen puts
+  /// their text back, instead of leaving them waiting forever.
+  List<PendingPrompt> _retireTaken(List<PendingPrompt> prompts) {
+    if (prompts.isEmpty || !ref.mounted) return const [];
+    final gone = {for (final prompt in prompts) prompt.requestId};
+    _pending = List.unmodifiable(_pending.where((p) => !gone.contains(p.requestId)));
+    state = state.copyWith(pending: _placePending());
+    return List.unmodifiable(prompts);
+  }
+
   /// A message went out: one more turn in the usage statistics (only how
   /// many).
   void _sent() {
     if (ref.mounted) ref.read(usageStatsProvider.notifier).count(UsageCount.turns);
+  }
+
+  /// A model call finished on the host: the tokens its provider reported go
+  /// to the usage statistics. Only a new log record (after the cursor, before
+  /// [Transcript.apply] moves it), never a snapshot's history, so a
+  /// reconnect replays nothing twice. A call that reported no usage adds
+  /// nothing.
+  void _countTokens(DshEvent event) {
+    if (event is! AssistantMessageEvent || event.seq <= _transcript.cursor || !ref.mounted) return;
+    final usage = event.usage;
+    if (usage == null) return;
+    ref
+        .read(usageStatsProvider.notifier)
+        .tokens(usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0), usage.outputTokens);
   }
 
   /// Retry the same text and attachment selections. Picking again is a new
@@ -1408,6 +1551,7 @@ class ChatController extends Notifier<ChatState> {
     ({List<String> receipts, List<String> paths}) staged, {
     required String requestId,
     required PromptMode mode,
+    bool Function()? deliveryAllowed,
   }) async {
     final client = operation.client;
     final images = [
@@ -1416,6 +1560,9 @@ class ChatController extends Notifier<ChatState> {
     ];
     Future<void> prompt(List<PromptImage> images, ({List<String> receipts, List<String> paths}) files) {
       _requireCurrent(operation);
+      if (deliveryAllowed != null && !deliveryAllowed()) {
+        throw const DshClosedException('Prepared phone route source changed');
+      }
       final paths = files.paths.map((path) => '- ${jsonEncode(path)}').join('\n');
       final content = paths.isEmpty
           ? text
@@ -1546,9 +1693,8 @@ class ChatController extends Notifier<ChatState> {
       return const [];
     }
     final last = _waiting().lastOrNull;
-    if (last == null || !last.resendable || !await _takeOut(operation, last) || !_currentOperation(operation)) {
-      return const [];
-    }
+    if (last == null || !last.resendable || !await _takeOut(operation, last)) return const [];
+    if (!_currentOperation(operation)) return _retireTaken([last]);
     return _putBack(operation, [last]);
   }
 
@@ -1569,18 +1715,19 @@ class ChatController extends Notifier<ChatState> {
       for (final p in _waiting().skipWhile((p) => p.requestId != prompt.requestId).skip(1))
         if (p.slot == InboxSlot.nextTurn && p.resendable) p,
     ];
-    if (!await _takeOut(operation, prompt) || !_currentOperation(operation)) return const [];
+    if (!await _takeOut(operation, prompt)) return const [];
+    if (!_currentOperation(operation)) return _retireTaken([prompt]);
     // Stopped or not, it goes back: a turn that goes on takes it as before.
     if (state.running) {
       await _stop(operation, failure: appL10n.stateChatStopFailed);
-      if (!_currentOperation(operation)) return const [];
+      if (!_currentOperation(operation)) return _retireTaken([prompt]);
     }
     final moved = [prompt];
     for (final p in behind) {
-      if (!_currentOperation(operation)) return const [];
+      if (!_currentOperation(operation)) return _retireTaken(moved);
       if (await _takeOut(operation, p)) moved.add(p);
     }
-    if (!_currentOperation(operation)) return const [];
+    if (!_currentOperation(operation)) return _retireTaken(moved);
     return _putBack(operation, moved);
   }
 
@@ -1631,7 +1778,7 @@ class ChatController extends Notifier<ChatState> {
     final lost = <PendingPrompt>[];
     Object? failure;
     for (final prompt in prompts) {
-      if (!_currentOperation(operation)) return const [];
+      if (!_currentOperation(operation)) return _retireTaken([...lost, prompt]);
       try {
         await _deliver(
           operation,
@@ -1823,6 +1970,7 @@ class ChatController extends Notifier<ChatState> {
         loading: state.loading,
         loadingOlder: state.loadingOlder,
         error: chatErrorText(e, action: appL10n.stateChatModelSwitchFailed),
+        syncError: state.syncError,
         defaultModelSaveFailed: _defaultModelSaveFailed,
         connection: state.connection,
         model: previous,

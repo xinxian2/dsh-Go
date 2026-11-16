@@ -4,13 +4,14 @@
 
 import 'dart:async';
 
-import 'package:dsh_client/dsh_client.dart' show TerminalShell;
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:dsh_client/dsh_client.dart' show RuntimeSupport, TerminalShell;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../l10n/l10n.dart';
+import '../../state/android_features.dart';
+import '../../state/runtime_capabilities_state.dart';
 import '../../state/terminal_state.dart';
 import '../common/app_dialog.dart';
 import '../common/app_sheet.dart';
@@ -24,6 +25,7 @@ import '../common/side_insets.dart';
 import '../shell/page_frame.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
+import '../workspace/text_prompt.dart';
 import 'terminal_keys.dart';
 import 'terminal_screen.dart';
 
@@ -102,41 +104,13 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
   }
 
   Future<void> _rename(TerminalTab tab) async {
-    final controller = TextEditingController(text: tab.title);
-    final waitForRemoval = !kIsWeb && defaultTargetPlatform == TargetPlatform.iOS;
-    Future<String?>? removed;
-    final next =
-        await showAppDialog<String>(
-          context: context,
-          builder: (dialog) {
-            if (waitForRemoval) removed = ModalRoute.of<String>(dialog)?.completed;
-            return AlertDialog(
-              title: Text(appL10n.botsTerminalRename),
-              content: TextField(
-                controller: controller,
-                autofocus: true,
-                maxLength: 120,
-                decoration: InputDecoration(hintText: appL10n.botsTerminalName, counterText: ''),
-                onSubmitted: (v) => Navigator.pop(dialog, v.trim()),
-              ),
-              actions: [
-                TextButton(onPressed: () => Navigator.pop(dialog), child: Text(appL10n.commonCancel)),
-                FilledButton(
-                  onPressed: () => Navigator.pop(dialog, controller.text.trim()),
-                  child: Text(appL10n.commonSave),
-                ),
-              ],
-            );
-          },
-        ).whenComplete(() {
-          final completion = removed;
-          if (completion == null) {
-            controller.dispose();
-          } else {
-            // The result arrives before the closing dialog leaves the overlay.
-            unawaited(completion.then<void>((_) => controller.dispose()));
-          }
-        });
+    final next = await showTextPrompt(
+      context,
+      title: appL10n.botsTerminalRename,
+      initial: tab.title,
+      hint: appL10n.botsTerminalName,
+      maxLength: 120,
+    );
     if (next == null || next.isEmpty || next == tab.title || !mounted) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     final ok = await ref.read(_provider.notifier).rename(tab.id, next);
@@ -179,20 +153,28 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
     final selected = state.selected;
     final padding = MediaQuery.paddingOf(context);
     final cwd = selected?.info?.cwd ?? state.environment?.cwd ?? '';
+    // HarmonyOS's own engine has no PTY and says so; asked before the first attach fails.
+    final ohos = ref.watch(operatingSystemProvider) == 'ohos';
+    final capabilities = ohos ? ref.watch(runtimeCapabilitiesProvider) : null;
+    final noPty = capabilities?.value?.shell.pty == RuntimeSupport.unsupported;
 
     final Widget body;
     if (state.offline) {
       body = Center(
         child: EmptyView(icon: AppIcons.offline, title: TerminalCopy.offline),
       );
-    } else if (!state.supported) {
+    } else if (!state.supported || noPty) {
       body = Center(
         child: EmptyView(
           art: FeatureTile(FeatureKind.terminal, size: FeatureTile.empty),
           title: l10n.botsTerminalUnsupported,
-          message: l10n.botsTerminalSupportedHosts,
+          message: noPty
+              ? l10n.harmonyTerminalNoPty
+              : (ohos ? l10n.harmonyTerminalSupportedHosts : l10n.botsTerminalSupportedHosts),
         ),
       );
+    } else if (capabilities?.isLoading ?? false) {
+      body = TerminalCardPlaceholder(label: l10n.botsTerminalOpening);
     } else if (state.error case final error?) {
       body = Center(
         child: EmptyView(

@@ -77,7 +77,7 @@ final class IOSPhoneLink: NSObject, FlutterStreamHandler, @preconcurrency UIDocu
       "connection": core.state, "connected": core.isReady, "lastCheck": lastCheck,
       "ddiCache": cache.status(), "operationPending": operationID != nil, "progress": progress,
       "clipboard": IOSPhoneClipboard.shared.status(),
-      "consent": ["foregroundGrantMinutes": 30, "perCallRequired": true, "notificationTapApproves": false],
+      "consent": ["foregroundGrantMinutes": 30, "perCallRequired": false, "notificationTapApproves": false],
     ]
   }
 
@@ -131,7 +131,7 @@ final class IOSPhoneLink: NSObject, FlutterStreamHandler, @preconcurrency UIDocu
       begin(reply) { [weak self] id in
         guard let self else { return ["ok": false, "code": "ERR_PHONE_CANCELLED"] }
         let allowed = await self.ask(title: "启用这台手机的开发者连接？",
-          message: "配对凭据可以连接本机开发者服务，用于读屏、触摸和输入。每次手机动作仍需单独批准；可随时关闭并清除凭据。",
+          message: "配对凭据可以连接本机开发者服务，用于读屏、触摸和输入。每个手机任务首次需要批准，授权最多 30 分钟；可随时暂停、关闭连接或清除凭据。",
           choices: [("enable", "启用"), ("cancel", "取消")])
         guard allowed == "enable", self.current(id), self.foreground else { return self.answer(false, code: "ERR_PHONE_CANCELLED") }
         guard self.pairing.hasRecord, !self.legacyPresent else { return self.answer(false, code: "ERR_PHONE_PAIRING_REQUIRED") }

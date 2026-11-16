@@ -35,7 +35,6 @@ final class IOSPetOverlay: NSObject {
   private var outputSize = CGSize(width: 480, height: 318)
   private var backpressure = 0
   private var manualAnimationPaused = false
-  private var wasKeepingAlive = false
   private var publishedKeepingAlive: Bool?
   private weak var prompt: UIAlertController?
   private var dismissPrompt: (() -> Void)?
@@ -43,11 +42,23 @@ final class IOSPetOverlay: NSObject {
 
   private static let enabledKey = "dsh.ios.petOverlay.enabled"
   private static let alwaysKey = "dsh.ios.petOverlay.alwaysShow"
+  private static let optionalDefaultsKey = "dsh.ios.petOverlay.optionalDefaultsApplied"
+
+  /// The optional overlay starts off, including the first upgrade from the
+  /// old required-PiP flow. A later explicit user choice is preserved.
+  static func configuration(from defaults: UserDefaults) -> (enabled: Bool, alwaysShow: Bool) {
+    if !defaults.bool(forKey: optionalDefaultsKey) {
+      defaults.set(false, forKey: enabledKey)
+      defaults.set(false, forKey: alwaysKey)
+      defaults.set(true, forKey: optionalDefaultsKey)
+    }
+    return (defaults.bool(forKey: enabledKey), defaults.bool(forKey: alwaysKey))
+  }
 
   var sourceView: UIView { picture.sourceView }
 
   /// Configuration/asset readiness, not a claim that iOS is running us in the
-  /// background. Phone admission must use isKeepingAlive while backgrounded.
+  /// background. It is an optional execution source, not phone admission.
   var isUsable: Bool {
     policy.enabled && !policy.snoozed && picture.supported && lastError == nil &&
       UIApplication.shared.isProtectedDataAvailable && picture.audioMayPrepare &&
@@ -102,20 +113,19 @@ final class IOSPetOverlay: NSObject {
   private override init() {
     super.init()
     let defaults = UserDefaults.standard
-    policy.enabled = defaults.object(forKey: Self.enabledKey) as? Bool ?? false
-    policy.alwaysShow = defaults.object(forKey: Self.alwaysKey) as? Bool ?? false
+    let configuration = Self.configuration(from: defaults)
+    policy.enabled = configuration.enabled
+    policy.alwaysShow = configuration.alwaysShow
     picture.onChange = { [weak self] in self?.pictureChanged() }
     picture.onRecoveryPossible = { [weak self] in self?.recoverTransientFailure() }
     picture.onFailure = { [weak self] code in
       guard let self else { return }
       self.lastError = code
-      self.pauseCurrentTask()
       self.evaluate()
     }
     picture.onUnexpectedStop = { [weak self] in
       guard let self else { return }
       self.policy.snoozed = true
-      self.pauseCurrentTask()
       self.evaluate()
     }
     picture.onSetPlaying = { [weak self] playing in
@@ -331,6 +341,10 @@ final class IOSPetOverlay: NSObject {
   }
 
   private func evaluate() {
+    // Keep the visible PiP running, but exclude its animated video and task
+    // text from system captures during phone control. Normal pet screenshots
+    // remain available after the task ends.
+    picture.sourceView.displayLayer.preventsCapture = policy.task != nil
     if policy.enabled, let id = state.packID, let renderer {
       do {
         _ = try renderer.load(packID: id)
@@ -374,11 +388,6 @@ final class IOSPetOverlay: NSObject {
   }
 
   private func pictureChanged() {
-    let keeping = isKeepingAlive
-    if wasKeepingAlive && !keeping && !inForeground && policy.task != nil {
-      pauseCurrentTask()
-    }
-    wasKeepingAlive = keeping
     updateDrawing()
     emit()
   }
@@ -432,7 +441,6 @@ final class IOSPetOverlay: NSObject {
         }
       } catch {
         lastError = (error as? PetOverlayPackFailure)?.code ?? "overlay_render_failed"
-        pauseCurrentTask()
         picture.stop()
         emit()
         return

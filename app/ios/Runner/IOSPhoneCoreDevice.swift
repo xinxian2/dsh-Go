@@ -182,6 +182,21 @@ final class IOSPhoneCoreDevice: NSObject {
     return run.id
   }
 
+  /// Task-completion return uses only the already owned connection. It never
+  /// prepares a tunnel or accepts an application chosen by a model.
+  func returnToApp(ownerID: String, current: () -> Bool) async -> Bool {
+    guard current(), let runID = currentRunID(ownerID: ownerID),
+      let bundle = Bundle.main.bundleIdentifier else { return false }
+    let result = await request(["op": "launch", "bundleId": bundle], ownerID: ownerID, current: {
+      current() && self.currentRunID(ownerID: ownerID) == runID
+    })
+    guard current(), currentRunID(ownerID: ownerID) == runID, case .success(let reply) = result,
+      reply.metadata.outcome == "dispatched" else { return false }
+    // A launch acknowledgement is not proof of foreground activation. The
+    // bridge separately checks UIKit before reporting that the app opened.
+    return true
+  }
+
   func prepare(ownerID: String, allowDDIMount: Bool = false,
                current: () -> Bool) async -> Result<[String: Bool], IOSPhoneCoreFailure> {
     guard native != nil else { return .failure(.init(code: "ERR_PHONE_NATIVE_UNAVAILABLE")) }

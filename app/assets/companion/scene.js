@@ -5,9 +5,13 @@
 window.companionScene = (() => {
   'use strict';
 
+  // The floating window draws only the character, without a second canvas.
+  if (document.documentElement.dataset.mode === 'float') return null;
+
   const canvas = document.getElementById('fx');
   const ctx = canvas.getContext('2d');
-  const DPR_CAP = 2;
+  const requestedDpr = Number(new URLSearchParams(location.search).get('dpr'));
+  const DPR_CAP = Number.isFinite(requestedDpr) && requestedDpr > 0 ? Math.min(2, Math.max(0.5, requestedDpr)) : 2;
 
   let width = 1;
   let height = 1;

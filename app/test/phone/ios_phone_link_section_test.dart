@@ -175,7 +175,7 @@ void main() {
     link.nextCode = 'ERR_PHONE_TUNNEL';
     await tapAndSettle(tester, find.text('检查'));
     expect(link.calls.last, 'checkConnection');
-    expect(find.textContaining('确认 LocalDevVPN 已连接'), findsOneWidget);
+    expect(find.textContaining('LocalDevVPN 已接通'), findsOneWidget);
 
     await tapAndSettle(tester, find.text('检查'));
     expect(find.text('连接正常'), findsOneWidget);

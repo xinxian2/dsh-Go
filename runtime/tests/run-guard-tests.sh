@@ -10,9 +10,9 @@
 # <dsh-prefix> is an `npm --prefix` tree such as runtime/.work/x86_64/dsh-prefix after
 # `rtbuild.py patch-dsh` (build-runtime.sh patches it in place).
 set -euo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HERE="$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUNTIME="$(dirname "$HERE")"
-PREFIX="$(cd "${1:?usage: run-guard-tests.sh <dsh-prefix> [--port N] [--no-bridge] [--expect-unguarded]}" && pwd)"; shift
+PREFIX="$(CDPATH= cd "${1:?usage: run-guard-tests.sh <dsh-prefix> [--port N] [--no-bridge] [--expect-unguarded]}" && pwd)"; shift
 PORT=38181 BRIDGE=1 TITLE_TESTS=1 EXTRA=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -45,6 +45,7 @@ if [[ "$BRIDGE" == 1 ]]; then
 fi
 
 LOG="$TMP/dsh-web.log"
+: > "$LOG"
 env -i PATH="$(dirname "$NODE"):/usr/bin:/bin" HOME="$TMP/home" DSH_HOME="$TMP/home/.dsh" LANG=C.UTF-8 TZ="${TZ:-Asia/Shanghai}" \
   DEEPSEEK_API_KEY=sk-dsh-app-guard-test-not-a-real-key UV_USE_IO_URING=0 \
   "$NODE" "$PREFIX/node_modules/@deepseek-ai/dsh/lib/bin.js" web "${PATCHES[@]}" \

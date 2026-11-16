@@ -1,4 +1,6 @@
-// Portions derived from ds-harness-remote (https://github.com/liguobao/ds-harness-remote), MIT, Copyright (c) 2026 DSH Remote contributors. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 DSH Remote contributors
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 // dsh_client carrier over an authenticated ds-harness-remote connection: maps
 // DshRpc / DshMux onto the Typert Remote tunnel RPCs (`harness.remote.call`,
 // `harness.remote.stream.open|close`, `harness.remote.transfer.*`) and events
@@ -258,6 +260,9 @@ class RemoteTunnelCarrier extends DshCarrier implements WorkspaceUploadCarrier {
 
   /// Capabilities of the live (or last) Host connection.
   List<String> get capabilities => _lastCapabilities;
+
+  @override
+  Set<String>? get peerCapabilities => _lastCapabilities.isEmpty ? null : _lastCapabilities.toSet();
   List<String> _lastCapabilities = const [];
 
   RemoteFailure? get lastFailure => _lastFailure;
@@ -1005,9 +1010,12 @@ class _TunnelLink implements DshMuxLink {
   Future<void> close(int code, String reason) async {
     if (_closed) return;
     _closed = true;
-    await _events?.cancel();
     // A link the mux abandons (ready timeout, $events closed, reconnect(),
     // client close) takes its connection with it; the next link is fresh.
-    await _carrier._closeSession(_session);
+    // Detach the session before the first await so an immediate reconnect
+    // cannot pick up this closing one.
+    final closing = _carrier._closeSession(_session);
+    await _events?.cancel();
+    await closing;
   }
 }

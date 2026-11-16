@@ -1,4 +1,6 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 // Local changes: a glass bottom sheet fed by `session/modelCatalog`, with a
 // channel filter, model cards and a capsule effort selector.
 
@@ -1024,7 +1026,13 @@ class _EmptyCatalog extends StatelessWidget {
       icon: AppIcons.noApiKey,
       title: l10n.viewModelNone,
       message: failure != null && failure.isNotEmpty ? failure : l10n.viewModelKeyHint,
-      action: FilledButton(onPressed: () => push(const ProvidersPage()), child: Text(l10n.viewModelManageProviders)),
+      // An empty picker has no selection to resume after provider management.
+      action: FilledButton(
+        onPressed: () =>
+            Navigator.of(context)
+                .pushReplacement<void, void>(MaterialPageRoute<void>(builder: (_) => const ProvidersPage())),
+        child: Text(l10n.viewModelManageProviders),
+      ),
     );
   }
 }

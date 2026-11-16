@@ -119,6 +119,18 @@ final class IOSAudioSessionCoordinatorTests: XCTestCase {
     IOSAudioSessionLease(role: role, coordinator: coordinator)
   }
 
+  func testCallTakesOnePlayAndRecordLeaseAndReleasesIt() throws {
+    let backend = AudioCoordinatorRecordingBackend()
+    let coordinator = IOSAudioSessionCoordinator(session: backend)
+    let call = lease(.call, coordinator)
+    try call.acquire()
+    XCTAssertEqual(backend.configuration, .call)
+    XCTAssertTrue(call.isValid)
+    call.release()
+    XCTAssertFalse(call.isHeld)
+    XCTAssertEqual(backend.activations, [true, false])
+  }
+
   func testConstructionAndReadinessDoNotActivateOrAdoptAnUnownedTuple() throws {
     let backend = AudioCoordinatorRecordingBackend()
     backend.configuration = .sharedOutput
@@ -924,5 +936,15 @@ final class IOSAudioSessionCoordinatorTests: XCTestCase {
       XCTAssertTrue(backend.configurations.isEmpty)
       XCTAssertTrue(backend.activations.isEmpty)
     }
+  }
+}
+
+final class IOSPCMChunkJoinerTests: XCTestCase {
+  func testOddNetworkChunksKeepEveryCompleteSampleInOrder() {
+    var joiner = IOSPCMChunkJoiner()
+    XCTAssertEqual(Array(joiner.append(Data([0x01]))), [])
+    XCTAssertEqual(Array(joiner.append(Data([0x02, 0x03]))), [0x01, 0x02])
+    XCTAssertEqual(Array(joiner.append(Data([0x04, 0x05, 0x06]))), [0x03, 0x04, 0x05, 0x06])
+    XCTAssertEqual(joiner.oddChunks, 2)
   }
 }

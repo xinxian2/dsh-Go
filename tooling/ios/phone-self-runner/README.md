@@ -175,7 +175,7 @@ After a real native confirmation that includes establishing screen/control
 sharing, Swift privately requests `prepareInput`. This operation is not exposed
 as a model/MCP tool. Settings checks and DDI mount probes never request it.
 Preparation invalidates any earlier native frame. Swift then obtains a screenshot,
-collects the per-action native approval, and recaptures/compares the screen under
+checks the current engine/session task grant, and recaptures/compares the screen under
 the same prepared owner before dispatching the approved input.
 
 ```json

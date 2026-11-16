@@ -6,12 +6,14 @@ import 'dart:convert';
 
 import '../state/app_info.dart';
 import 'diagnostics_bundle.dart';
+import 'diagnostics_channel.dart';
 import 'redact.dart';
 
 /// Most lines kept from each log tail (the model reads this file, not a zip).
 const diagnosticsEngineLines = 80;
 const diagnosticsFailureLines = 60;
 const diagnosticsErrorLines = 10;
+const diagnosticsSystemImeEvents = 12;
 
 /// Hard cap: a diagnostics file that costs more context than this is no
 /// longer worth reading. The zip export stays available for everything else.
@@ -25,7 +27,9 @@ String diagnosticsMarkdown(DiagnosticsSnapshot s, {int maxBytes = diagnosticsMar
     ..writeln()
     ..writeln('> App 写在引擎里的环境快照，给排查问题用；已脱敏。生成时间：${_time(s.at)}。')
     ..writeln();
+  _systemIme(b, s);
   _environment(b, s);
+  _evidence(b, s);
   _connection(b, s);
   _phone(b, s);
   _performance(b, s);
@@ -50,6 +54,48 @@ String _utf8Prefix(List<int> bytes, int budget) {
     end--;
   }
   return utf8.decode(bytes.sublist(0, end));
+}
+
+void _systemIme(StringBuffer b, DiagnosticsSnapshot s) {
+  final evidence = s.systemIme;
+  if (evidence == null) return;
+  final at = DateTime.fromMillisecondsSinceEpoch(evidence.capturedAt, isUtc: true);
+  if (evidence.source == 'ohosWindowGeometry') {
+    b
+      ..writeln('## 本应用键盘几何（手动导出，ohosWindowGeometry）')
+      ..writeln('- capturedAt: ${at.toIso8601String()} · code: ${evidence.code} · events: ${evidence.events.length}')
+      ..writeln('- 仅本应用主窗口回调；最近120秒、最多64条；坐标与尺寸单位px。时间戳是回调收到时间，不是系统动作发生时间。')
+      ..writeln('- 不含输入内容或系统日志；不能据此推断其他窗口、完整浮动键盘轨迹或系统输入法内部状态。');
+    if (evidence.events.isEmpty) {
+      b.writeln('- 没有可用记录；空记录或失败不能证明键盘行为正常。');
+    } else {
+      final recent = evidence.events.reversed.take(diagnosticsSystemImeEvents).toList().reversed;
+      b.writeln('- 最近${recent.length}条，ZIP保留完整有界记录；同毫秒条目按回调收到顺序排列：');
+      for (final event in recent) {
+        b.writeln('  - ${event.timestamp} ${event.event} geometry=${jsonEncode(event.geometry)}');
+      }
+    }
+    b.writeln();
+    return;
+  }
+
+  b
+    ..writeln('## System IME evidence (manual, privilegedIme)')
+    ..writeln('- capturedAt: ${at.toIso8601String()} · code: ${evidence.code} · events: ${evidence.events.length}')
+    ..writeln('- Fixed events only; preceding 120 seconds, maximum 64. Retained capture, not live monitoring.')
+    ..writeln('- Requests do not prove keyboard visibility. fromUser=null means unknown, not false.');
+  if (evidence.events.isEmpty) {
+    b.writeln('- No usable events: empty/failed capture is NOT evidence that the system behaved normally.');
+  } else {
+    final recent = evidence.events.reversed.take(diagnosticsSystemImeEvents).toList().reversed;
+    b.writeln('- Most recent ${recent.length} events (ZIP contains the full bounded capture):');
+    for (final event in recent) {
+      b.writeln(
+        '  - ${event.timestamp} ${event.event} fromUser=${event.fromUser} reason=${event.reason} origin=${event.origin}',
+      );
+    }
+  }
+  b.writeln();
 }
 
 void _environment(StringBuffer b, DiagnosticsSnapshot s) {
@@ -173,6 +219,23 @@ void _performance(StringBuffer b, DiagnosticsSnapshot s) {
   b.writeln();
 }
 
+void _evidence(StringBuffer b, DiagnosticsSnapshot s) {
+  if (s.native.evidence.isEmpty) return;
+  final evidence = diagnosticEvidenceFacts(s.native.evidence);
+  b.writeln('## App 故障证据（跨重启保留）');
+  b.writeln('- 可用性：${jsonEncode(evidence['availability'])}');
+  for (final key in ['processExits', 'appErrors', 'voiceStages']) {
+    final rows = evidence[key];
+    if (rows is! List) continue;
+    final tail = rows.reversed.take(key == 'voiceStages' ? 8 : 3).toList().reversed;
+    for (final row in tail) {
+      b.writeln('- $key：${jsonEncode(row)}');
+    }
+  }
+  b.writeln('- 无记录或系统不提供记录，不代表没有发生故障；退出原因不等于完整崩溃堆栈。');
+  b.writeln();
+}
+
 void _errors(StringBuffer b, DiagnosticsSnapshot s) {
   if (s.appErrors.isEmpty) return;
   b.writeln('## 最近错误（App 内捕获）');
@@ -201,7 +264,13 @@ String _join(List<Object?> parts, {bool mono = false}) {
 String _android(Map<String, Object?> device) {
   final version = device['android'];
   final sdk = device['sdkInt'];
-  if (version == null && sdk == null) return '';
+  if (version == null && sdk == null) {
+    // HarmonyOS names them itself (OhosDeviceFacts.ets).
+    final os = device['osVersion'];
+    final api = device['apiVersion'];
+    if (os == null && api == null) return '';
+    return os == null ? 'API $api' : '$os${api == null ? '' : ' (API $api)'}';
+  }
   return version == null ? 'SDK $sdk' : 'Android $version${sdk == null ? '' : ' (SDK $sdk)'}';
 }
 

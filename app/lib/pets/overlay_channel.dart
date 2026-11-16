@@ -1,7 +1,8 @@
 // The Dart side of the out-of-app pet (MethodChannel `dsh/pet_overlay`;
 // native: android/.../pet/PetOverlayPlugin.kt). Dart pushes every new
-// [PetState]; the overlay's own switches, 「一直显示」, 「今天不再显示」 and the
-// permission live natively and are read and set here. Rules:
+// [PetState] (and says when a brought pet's files changed); the overlay's own
+// switches, 「一直显示」, 「今天不再显示」 and the permission live natively and
+// are read and set here. Rules:
 // `docs/design/pets.md` §2.7, §6.
 //
 // Every call tolerates the native side being absent (widget tests, desktop):
@@ -54,6 +55,9 @@ class PetOverlayStatus {
     this.phoneTaskActive = false,
     this.taskPaused = false,
     this.errorCode,
+    this.companionRendering = false,
+    this.companionFallback = false,
+    this.companionProblem,
   });
 
   /// No native side: nothing to switch on.
@@ -74,6 +78,9 @@ class PetOverlayStatus {
     phoneTaskActive: m['phoneTaskActive'] == true,
     taskPaused: m['paused'] == true || m['needsStopConfirmation'] == true,
     errorCode: m['errorCode'] is String ? m['errorCode']! as String : null,
+    companionRendering: m['companionRendering'] == true,
+    companionFallback: m['companionFallback'] == true,
+    companionProblem: m['companionProblem'] is String ? m['companionProblem'] as String : null,
   );
 
   final bool native;
@@ -100,6 +107,9 @@ class PetOverlayStatus {
   /// Not native: set by [PetOverlayController] when a trip to system
   /// settings came back without the permission (the row says 「未授权」).
   final bool refused;
+  final bool companionRendering;
+  final bool companionFallback;
+  final String? companionProblem;
 
   // iOS: the pet in picture-in-picture, which keeps phone control alive in the background
   // (tooling/ios/pet-overlay-tests/README.md). Android sends none of these.
@@ -138,6 +148,9 @@ class PetOverlayStatus {
     phoneTaskActive: phoneTaskActive,
     taskPaused: taskPaused,
     errorCode: errorCode,
+    companionRendering: companionRendering,
+    companionFallback: companionFallback,
+    companionProblem: companionProblem,
   );
 
   /// On and able to show.
@@ -161,7 +174,10 @@ class PetOverlayStatus {
       other.pipActive == pipActive &&
       other.phoneTaskActive == phoneTaskActive &&
       other.taskPaused == taskPaused &&
-      other.errorCode == errorCode;
+      other.errorCode == errorCode &&
+      other.companionRendering == companionRendering &&
+      other.companionFallback == companionFallback &&
+      other.companionProblem == companionProblem;
 
   @override
   int get hashCode => Object.hash(
@@ -181,6 +197,9 @@ class PetOverlayStatus {
     phoneTaskActive,
     taskPaused,
     errorCode,
+    companionRendering,
+    companionFallback,
+    companionProblem,
   );
 
   @override
@@ -216,7 +235,29 @@ class PetOverlayChannel {
     }
   }
 
+  /// A brought pet's files changed (imported again, removed): the overlay
+  /// reads [id] from disk again if it is the one out, instead of keeping the
+  /// old picture (it keys what it loaded by id and size only).
+  Future<void> reloadPack(String id) async {
+    try {
+      await channel.invokeMethod<void>('reloadPack', {'id': id});
+    } on MissingPluginException {
+      // Tests, desktop, an older native side: nothing to reload.
+    } on PlatformException {
+      // Not worth failing an import over.
+    }
+  }
+
   Future<PetOverlayStatus> status() => _call('status');
+
+  /// Acknowledgement is required: pack replacement must not proceed while a
+  /// native WebView might still read it. Unlike optional pixel pushes, this
+  /// call propagates an unavailable/failed native endpoint to its owner.
+  Future<PetOverlayStatus> configureCompanion({Uri? page, String? notice}) async {
+    final raw = await channel.invokeMethod<Object?>('configureCompanion', {'url': page?.toString(), 'notice': notice});
+    if (raw is! Map) throw PlatformException(code: 'companion_native_unavailable');
+    return PetOverlayStatus.fromMap(raw);
+  }
 
   /// Like [status], but checks the permission for real (adds and removes an
   /// invisible window): what to call when coming back from system settings.

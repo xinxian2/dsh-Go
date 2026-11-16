@@ -68,7 +68,7 @@ static struct fd *open_path(struct mount *m, const char *p, int flags,
                             int mode) {
   const int supported = O_ACCMODE_ | O_CREAT_ | O_EXCL_ | O_TRUNC_ | O_APPEND_ |
                         O_DIRECTORY_ | O_NOFOLLOW_ | O_CLOEXEC_ | O_LARGEFILE_ |
-                        O_NOCTTY_;
+                        O_NOCTTY_ | O_NONBLOCK_;
   if (flags & ~supported)
     return ERR_PTR(_ENOTSUP);
   p = relative(p);
@@ -100,7 +100,11 @@ static struct fd *open_path(struct mount *m, const char *p, int flags,
     hostflags |= O_TRUNC;
   if (flags & O_APPEND_)
     hostflags |= O_APPEND;
-  dsh_file *file = dsh_file_open(b->root, p, strlen(p), hostflags, mode);
+  // Linux open ignores file-type bits in mode; BusyBox cp passes st_mode.
+  // Keep the confined helper's rejection of special permission bits, while
+  // projecting an ordinary file's permissions instead of rejecting its type.
+  dsh_file *file = dsh_file_open(b->root, p, strlen(p), hostflags,
+                                 mode & ~S_IFMT);
   if (!file)
     return ERR_PTR(errno_map());
   struct fd *f = fd_create(NULL);
@@ -128,7 +132,7 @@ static int mkdir_path(struct mount *m, const char *p, mode_t_ mode) {
   if (dsh_root_readonly(root) &&
       dsh_root_lstat(root, p, strlen(p), &existing) == 0 && S_ISDIR(existing.st_mode))
     return _EEXIST;
-  int r = dsh_directory_make(root, p, strlen(p), mode);
+  int r = dsh_directory_make(root, p, strlen(p), mode & ~S_IFMT);
   return r < 0 ? errno_map() : r;
 }
 static int rmdir_path(struct mount *m, const char *p) {
@@ -169,8 +173,12 @@ static int get_path(struct fd *f, char *out) {
   return v < 0 ? errno_map() : v;
 }
 static int set_fd(struct fd *f, struct attr a) {
-  if (S_ISDIR(f->type))
-    return dsh_root_readonly(context(f->mount)->root) ? _EROFS : _ENOTSUP;
+  if (S_ISDIR(f->type)) {
+    if (dsh_root_readonly(context(f->mount)->root)) return _EROFS;
+    if (a.type != attr_mode) return _ENOTSUP;
+    int result = dsh_directory_chmod(f->data, a.mode & ~S_IFMT);
+    return result < 0 ? errno_map() : result;
+  }
   return dsh_bound_fsetattr(f, a);
 }
 static int set_path(struct mount *m, const char *p, struct attr a) {
@@ -182,12 +190,24 @@ static int set_path(struct mount *m, const char *p, struct attr a) {
     return _ENOTSUP;
   if (a.type != attr_size && a.type != attr_mode)
     return _EINVAL;
+  if (a.type == attr_mode) {
+    struct stat st;
+    if (dsh_root_lstat(r, p, strlen(p), &st) < 0) return errno_map();
+    if (S_ISDIR(st.st_mode)) {
+      dsh_directory *directory = dsh_directory_open(r, p, strlen(p));
+      if (!directory) return errno_map();
+      int result = dsh_directory_chmod(directory, a.mode & ~S_IFMT);
+      int error = result < 0 ? errno_map() : result;
+      dsh_directory_close(directory);
+      return error;
+    }
+  }
   dsh_file *f = dsh_file_open(r, p, strlen(p),
                               a.type == attr_size ? O_RDWR : O_RDONLY, 0);
   if (!f)
     return errno_map();
   int v = a.type == attr_size   ? dsh_file_truncate(f, a.size)
-          : a.type == attr_mode ? dsh_file_chmod(f, a.mode)
+          : a.type == attr_mode ? dsh_file_chmod(f, a.mode & ~S_IFMT)
                                 : -1;
   int result = v < 0 ? errno_map() : v;
   dsh_file_close(f);
@@ -210,6 +230,35 @@ static int stat_fs(struct mount *m, struct statfsbuf *out) {
   out->flags = dsh_root_readonly(context(m)->root) ? 1 : 0;
   return 0;
 }
+static int times_path(struct mount *m, const char *p,
+                       struct timespec atime, struct timespec mtime) {
+  dsh_root *root = context(m)->root;
+  if (dsh_root_readonly(root)) return _EROFS;
+  struct timespec times[2] = {atime, mtime};
+  for (size_t i = 0; i < 2; i++) {
+    // Linux and Darwin use different sentinel values for utimensat.
+    if (times[i].tv_nsec == (1L << 30) - 1) times[i].tv_nsec = UTIME_NOW;
+    else if (times[i].tv_nsec == (1L << 30) - 2) times[i].tv_nsec = UTIME_OMIT;
+    else if (times[i].tv_nsec < 0 || times[i].tv_nsec >= 1000000000L) return _EINVAL;
+  }
+  p = relative(p);
+  struct stat st;
+  if (dsh_root_lstat(root, p, strlen(p), &st) < 0) return errno_map();
+  if (S_ISDIR(st.st_mode)) {
+    dsh_directory *directory = dsh_directory_open(root, p, strlen(p));
+    if (!directory) return errno_map();
+    int result = dsh_directory_times(directory, times);
+    int error = result < 0 ? errno_map() : result;
+    dsh_directory_close(directory);
+    return error;
+  }
+  dsh_file *file = dsh_file_open(root, p, strlen(p), O_RDONLY, 0);
+  if (!file) return errno_map();
+  int result = dsh_file_times(file, times);
+  int error = result < 0 ? errno_map() : result;
+  dsh_file_close(file);
+  return error;
+}
 static const struct fs_ops operations = {.name = "dsh-bound",
                                          .magic = 0x445348,
                                          .mount = mount_root,
@@ -227,6 +276,7 @@ static const struct fs_ops operations = {.name = "dsh-bound",
                                          .getpath = get_path,
                                          .setattr = set_path,
                                          .fsetattr = set_fd,
+                                         .utime = times_path,
                                          .statfs = stat_fs};
 int dsh_bound_mount(const char *point, dsh_root *root, uid_t_ uid, uid_t_ gid) {
   if (!point || !root || pending)

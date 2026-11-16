@@ -51,6 +51,8 @@ int dsh_directory_rewind(dsh_directory *);
 long dsh_directory_tell(dsh_directory *);
 void dsh_directory_seek(dsh_directory *, long);
 int dsh_directory_stat(dsh_directory *, struct stat *);
+int dsh_directory_chmod(dsh_directory *, mode_t);
+int dsh_directory_times(dsh_directory *, const struct timespec[2]);
 int dsh_directory_make(dsh_root *, const char *, size_t, mode_t);
 int dsh_directory_remove(dsh_root *, const char *, size_t);
 // lstat-style leaf only; never follows a host symlink.

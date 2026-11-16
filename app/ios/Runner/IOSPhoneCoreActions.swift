@@ -31,6 +31,21 @@ final class IOSPhoneCoreActions {
     self.core = core ?? .shared; self.screen = screen ?? IOSPhoneScreen()
   }
 
+  // Foreground activation adapted from Menghuan1918/dsh-Go (AGPL-3.0),
+  // feat/ios-phone-self-runner IOSPhoneSelfRunner.swift, blob 6b3255a945bedc3fcb4e02c31a5b6a23326a467c.
+  // AppService can launch a process without activating its scene. This only
+  // requests activation; the owned call still waits for the actual app transition.
+  static func requestForeground(_ bundleID: String) -> Bool {
+    guard PhoneRunnerAppCatalog.bundleID(for: bundleID) == bundleID,
+      let type = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type,
+      let workspace = type.perform(NSSelectorFromString("defaultWorkspace"))?.takeUnretainedValue() as? NSObject
+    else { return false }
+    let selector = NSSelectorFromString("openApplicationWithBundleID:")
+    guard workspace.responds(to: selector) else { return false }
+    _ = workspace.perform(selector, with: bundleID)
+    return true
+  }
+
   func invalidate() { epoch &+= 1; binding = nil; latestToken = nil; lastOpenedApplication = nil; screen.invalidate() }
 
   func targetLabel(_ plan: IOSPhoneOperation, ownerID: String, sessionID: String) -> String? {
@@ -123,8 +138,10 @@ final class IOSPhoneCoreActions {
       }
       if plan.method == .open, let application {
         let opened = try await send(["op": "launch", "bundleId": application], execution, current: live)
+        try require(live)
+        _ = Self.requestForeground(application)
         guard await consent.waitForTarget(request, current: live) else {
-          throw IOSPhoneOperationError(message: "系统已接受应用启动请求；" + consent.targetWaitFailureMessage)
+          throw IOSPhoneOperationError(message: "应用启动已派发，但目标界面尚未核实；请核对手机，不要自动重复打开。")
         }
         let reply = try await capture(execution, current: live)
         let output = try await observe(reply, execution, image: false, detail: false, current: live)
@@ -376,7 +393,7 @@ final class IOSPhoneCoreActions {
     try require(current)
     let needsBackground = values["nativeFrameId"] != nil || values["op"] as? String == "screenshot"
     let permitted = { current() && (!needsBackground ||
-      (UIApplication.shared.applicationState == .background && IOSPetOverlay.shared.isKeepingAlive)) }
+      UIApplication.shared.applicationState == .background) }
     guard permitted() else { throw IOSPhoneScreenError.cancelled }
     let reply: IOSPhoneCoreReply
     switch await core.request(values, ownerID: execution.ownerID, current: permitted) {
@@ -397,8 +414,8 @@ final class IOSPhoneCoreActions {
   }
   private func requireBackground(_ current: () -> Bool) throws {
     try require(current)
-    guard UIApplication.shared.applicationState == .background, IOSPetOverlay.shared.isKeepingAlive else {
-      throw IOSPhoneOperationError(message: "目标界面或画中画已改变，停止继续派发。")
+    guard UIApplication.shared.applicationState == .background else {
+      throw IOSPhoneOperationError(message: "DSH Go 尚未离开前台，没有取得目标界面。")
     }
   }
   private func swipe(_ direction: String, anchor: CGPoint?, frame: String) -> [String: Any] {

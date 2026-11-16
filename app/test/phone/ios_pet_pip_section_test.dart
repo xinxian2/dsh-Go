@@ -1,5 +1,4 @@
-// 手机操控 → 宠物画中画 (iOS): phone control waits for it, so it says when it is off or stopped and
-// how to get it back; every switch goes to the native side, which asks for itself.
+// Optional iOS pet window: enabling or recovering it asks the native side.
 
 import 'package:dsh_app/pets/overlay_channel.dart';
 import 'package:dsh_app/ui/phone/ios_pet_pip_section.dart';
@@ -90,11 +89,11 @@ void main() {
     expect(find.text('宠物画中画'), findsNothing);
   }, variant: ios);
 
-  testWidgets('off: phone control needs it, and the switch asks the native side', (tester) async {
+  testWidgets('off: the optional window stays off, and enabling asks the native side', (tester) async {
     current = _ios();
     await show(tester);
     expect(find.text('宠物画中画'), findsOneWidget);
-    expect(find.text('手机操控要先打开它'), findsOneWidget);
+    expect(find.text('可选，默认关闭'), findsOneWidget);
     expect(find.text('任务结束后也留着'), findsNothing);
     await tapAndSettle(tester, find.byType(Switch));
     expect(calls.last, 'setEnabled {enabled: true}');
@@ -112,7 +111,7 @@ void main() {
     });
     await tapAndSettle(tester, find.byType(Switch));
     expect(calls, containsAllInOrder(['setEnabled', 'status']));
-    expect(find.text('手机操控要先打开它'), findsOneWidget);
+    expect(find.text('可选，默认关闭'), findsOneWidget);
   }, variant: ios);
 
   testWidgets('stopped when the phone locked: it says so, and 恢复 brings it back', (tester) async {

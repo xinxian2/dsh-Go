@@ -6,7 +6,7 @@ name: iOS compile
 
 on:
   push:
-    branches: ['feat/ios-**', 'ios/**']
+    branches: [main, 'feat/ios-**', 'ios/**']
     paths:
       - 'app/**'
       - 'packages/**'
@@ -36,6 +36,7 @@ jobs:
         run: |
           bash tooling/ios/build-phone-self-runner.sh --check
           python3 tooling/ios/tests/phone-self-runner.test.py -v
+          python3 -B tooling/ios/test-channel-contract.py -v
 
   compile:
     if: github.ref != 'refs/heads/ios/lock-screen-xcode27'
@@ -111,8 +112,8 @@ jobs:
         shell: bash
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+      IOS_TEST_VERSION: 1.1.0
       DSH_IOS_ENGINE_WORK: ${{ github.workspace }}/../engine-work
-      IOS_TEST_VERSION: 1.0.14
       FLUTTER_VERSION: 3.47.7
       FLUTTER_SHA256: dd9da574c3168460550117eb0e8dd0313ae934fabf64a82a6d557fff5fd1422e
     steps:
@@ -344,14 +345,10 @@ jobs:
           flutter pub get --enforce-lockfile
           flutter gen-l10n
 
-      - name: Check iOS conversation cancellation and background task ownership
-        working-directory: app
-        run: flutter test test/phone/phone_stop_watcher_test.dart test/state/continued_run_owner_test.dart
-
       - name: Archive as for TestFlight, and look inside
         id: archive
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
-        run: bash tooling/ios/check-archive.sh --build-name="$IOS_TEST_VERSION" --build-number="$GITHUB_RUN_NUMBER"
+        run: bash tooling/ios/check-archive.sh --build-name="$IOS_TEST_VERSION" --build-number="$GITHUB_RUN_NUMBER" --dart-define="DSH_APP_VERSION=$IOS_TEST_VERSION+$GITHUB_RUN_NUMBER"
 
       - name: Verify the version and build number in the IPA
         id: ipa-version

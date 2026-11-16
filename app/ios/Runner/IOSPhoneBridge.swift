@@ -253,8 +253,8 @@ final class IOSPhoneBridge: NSObject, URLSessionTaskDelegate {
           let result: IOSPhoneOutcome
           if kind.hasPrefix("runner-") {
             IOSPhoneControl.shared.begin(request, bridge: self)
-            // Claiming and a cached thirty-minute grant are not per-call
-            // approval. The runner invokes this only AFTER the native button.
+            // The runner checks its native task grant before beginning each
+            // still-live call; ordinary calls need no foreground round trip.
             result = await self.runner.run(request, authorize: { [weak self] in
               guard let self, self.current(request) else { return false }
               let begun = (try? await self.post("begin", ["id": request.id]))?.0 == 200
@@ -338,6 +338,7 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
   private var methods: FlutterMethodChannel?
   private var events: FlutterEventChannel?
   private var sink: FlutterEventSink?
+  var onTaskActivityChanged: ((Bool) -> Void)?
   private var taskID = 0
   private var owner: String?
   private var ownerRunID: String?
@@ -461,7 +462,10 @@ final class IOSPhoneControl: NSObject, FlutterStreamHandler {
     return ["enabled": enabled, "bridgeListening": bridge != nil && IOSPhoneSelfRunner.shared.isConfigured,
       "task": task]
   }
-  private func emit() { sink?(status()) }
+  private func emit() {
+    onTaskActivityChanged?(active && !paused && !stopped)
+    sink?(status())
+  }
   func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
     sink = events; emit(); return nil
   }

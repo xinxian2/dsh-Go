@@ -317,3 +317,46 @@ diff --git a/fs/mount.c b/fs/mount.c
  
      // Copy from guest memory
      char buf[4096];
+--- a/kernel/memory.h
++++ b/kernel/memory.h
+@@ -154,0 +155,3 @@
++// Confined private file snapshot: whole pages beyond EOF are mapped but must
++// never translate, including after mprotect or fork (Linux SIGBUS semantics).
++#define P_FILE_EOF (1 << 9)
+--- a/kernel/memory.c
++++ b/kernel/memory.c
+@@ -867 +867 @@
+-#define P_META_FLAGS (P_ANONYMOUS | P_GROWSDOWN | P_COW | P_SHARED | P_CODE)
++#define P_META_FLAGS (P_ANONYMOUS | P_GROWSDOWN | P_COW | P_SHARED | P_CODE | P_FILE_EOF)
+@@ -1046 +1046 @@
+-    if (entry == NULL)
++    if (entry == NULL || (entry->flags & P_FILE_EOF))
+@@ -1302,0 +1303,2 @@
++    if (entry != NULL && (entry->flags & P_FILE_EOF))
++        return NULL;
+--- a/kernel/signal.h
++++ b/kernel/signal.h
+@@ -74,0 +75,2 @@
++#define BUS_ADRERR_ 2
++
+--- a/kernel/calls.c
++++ b/kernel/calls.c
+@@ -299,0 +300,16 @@
++        // An ELF loader may reserve more pages than the file contains. They
++        // are not anonymous memory: no demand-map or zero-load recovery may
++        // turn an access into success. Handle before the ARM64 heuristics.
++        read_wrlock(&current->mem->lock);
++        struct pt_entry *fault_page = mem_pt(current->mem, PAGE(cpu->segfault_addr));
++        bool file_eof = fault_page != NULL && (fault_page->flags & P_FILE_EOF);
++        read_wrunlock(&current->mem->lock);
++        if (file_eof) {
++#ifdef GUEST_ARM64
++            gpf_use_precise_pc(cpu);
++#endif
++            deliver_signal(current, SIGBUS_, (struct siginfo_) {
++                .code = BUS_ADRERR_, .fault.addr = cpu->segfault_addr,
++            });
++            goto gpf_complete;
++        }
+@@ -1116,0 +1133 @@
++        gpf_complete:;

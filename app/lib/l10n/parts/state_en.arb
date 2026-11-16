@@ -40,6 +40,7 @@
   "stateSizeSmall": "Small",
   "stateSizeStandard": "Standard",
   "stateSizeLarge": "Large",
+  "stateSizeCustom": "Custom",
   "statePetDone": "Done",
   "statePetFailed": "Something went wrong",
   "statePhoneNotReady": "Phone control isn’t ready",
@@ -168,6 +169,7 @@
   "stateDrawerEarlier": "Earlier",
   "stateEngineAuthFailed": "Engine authentication failed",
   "stateChatMissing": "This chat is gone",
+  "stateChatFormatUnsupported": "This engine cannot read this chat's log format. Export diagnostics to investigate.",
   "stateEngineUnsupported": "Not supported by this engine version",
   "stateEngineServiceUnavailable": "The required engine service is not ready. Check the engine logs or export diagnostics.",
   "stateEngineOperationUnavailable": "The engine cannot run this operation right now. Check the engine logs.",
@@ -306,6 +308,7 @@
   "stateSubscriptionDisconnected": "Engine disconnected. Try again later.",
   "stateTerminalLimit": "Terminal limit reached",
   "stateTerminalStartFailed": "Couldn’t start terminal",
+  "stateTerminalDisabledOnHost": "This computer turned off the remote terminal. Turn on “Terminal” in Remote settings on the computer, then try again.",
   "stateTileDuotone": "Duotone",
   "stateTileGeometric": "Geometric",
   "stateTileGlassy": "Glass",
@@ -372,5 +375,9 @@
   "stateUiWeb": "Web",
   "statePluginRegistryProgressUnknown": "Downloading from {registry} (registry {attempt}/null)",
   "stateProviderTokenCountInvalid": "Enter a number, like 128K",
-  "appSlogan": "Anytime, anywhere. Just Go!"
+  "appSlogan": "Anytime, anywhere. Just Go!",
+  "statePasteEmpty": "The clipboard has no text to paste.",
+  "statePasteDenied": "Paste was not authorized. Tap the Paste button again.",
+  "statePasteBusy": "The paste window is still active or closing. Finish or cancel it, then try again.",
+  "statePasteFailed": "Could not read the clipboard. Try again or enter the text manually."
 }

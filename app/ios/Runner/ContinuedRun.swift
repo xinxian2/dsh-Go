@@ -21,27 +21,37 @@ final class ContinuedRun {
   init() {
     NotificationCenter.default.addObserver(
       self, selector: #selector(becameActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(willResignActive), name: UIApplication.willResignActiveNotification, object: nil)
   }
 
   func update(running: Bool) {
     guard running != wanted else { return }
     wanted = running
+    trace(running ? "requested" : "idle")
     if running {
       spent = false
-      submit()
     } else {
       finish(success: true)
     }
   }
 
-  /// A turn can start while the app is on its way out, and a request is only accepted in front.
-  @objc private func becameActive() {
+  /// Continued tasks show a system Live Activity as soon as submitted. Submit
+  /// at the foreground-to-background boundary so an ordinary foreground chat
+  /// does not leave an always-on progress card above the conversation.
+  @objc private func willResignActive() {
     if wanted { submit() }
+  }
+
+  @objc private func becameActive() {
+    // Returning through Control Center or from another app ends the card. A
+    // still-running turn can request a fresh task on the next departure.
+    finish(success: true)
   }
 
   private func submit() {
     guard #available(iOS 26.0, *), !spent, task == nil, submitted == nil,
-      UIApplication.shared.applicationState == .active
+      UIApplication.shared.applicationState != .background
     else { return }
     // Each request registers its own identifier, so a late launch can't be taken for a newer turn's.
     let identifier = "\(Bundle.main.bundleIdentifier ?? "dsh").continued.\(UUID().uuidString)"
@@ -52,22 +62,21 @@ final class ContinuedRun {
       }
       self.started(task)
     }
-    guard registered else {
-      onDiagnostic?("registration_failed")
-      return
-    }
+    guard registered else { trace("registration-failed"); return }
     let request = BGContinuedProcessingTaskRequest(
       identifier: identifier,
       title: String(localized: "DSH Go background execution"),
       subtitle: String(localized: "Keeping the local engine available"))
     // Now or not at all: a turn is no use to anyone once it has already paused.
     request.strategy = .fail
+    submitted = identifier
     do {
       try BGTaskScheduler.shared.submit(request)
-      submitted = identifier
-      onDiagnostic?("submitted")
+      trace("submitted")
     } catch {
-      onDiagnostic?("submission_failed_\((error as NSError).code)")
+      if submitted == identifier { submitted = nil }
+      trace("submit-failed-\((error as NSError).code)")
+      // The system said no. The engine pauses in the background, as it does without this.
     }
   }
 
@@ -79,15 +88,14 @@ final class ContinuedRun {
     }
     submitted = nil
     self.task = task
+    trace("running")
     task.expirationHandler = { [weak self, weak task] in
       DispatchQueue.main.async {
         guard let self, let task, self.task === task else { return }
         self.spent = true
-        // This task grants execution time. The engine can keep running after
-        // a handoff even though this particular grant is ending.
         let handedOff = UIApplication.shared.applicationState == .active ||
           self.isPictureInPictureKeepingAlive?() == true
-        self.onDiagnostic?(handedOff ? "expired_handed_off" : "expired")
+        self.trace(handedOff ? "expired_handed_off" : "expired")
         self.finish(success: handedOff)
       }
     }
@@ -96,8 +104,18 @@ final class ContinuedRun {
     progress = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak task] _ in
       task?.progress.completedUnitCount += 1
     }
-    onDiagnostic?("started")
     onChange?(true)
+  }
+
+  // Bounded, content-free development evidence for actual OS acceptance.
+  // Never include tool arguments, endpoints, tokens or conversation identifiers.
+  private func trace(_ stage: String) {
+    onDiagnostic?(stage)
+    guard let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+    let file = directory.appendingPathComponent("dsh-background-task.log")
+    let previous = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+    let line = "\(Date().timeIntervalSince1970) continued \(stage)\n"
+    try? (String(previous.suffix(8192)) + line).write(to: file, atomically: true, encoding: .utf8)
   }
 
   private func finish(success: Bool) {

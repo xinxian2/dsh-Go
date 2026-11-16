@@ -119,7 +119,7 @@ function screenshot(file) {
 /** Every reported observation is a gate: "done" alone says only that Dart got to the end. */
 function engineProblem(steps) {
   const expected = ['main', 'guest root', 'status', 'install', 'install again', 'start', 'login', 'capabilities',
-    'logs', 'stop', 'restart', 'performance', 'stop again', 'reset', 'install after reset', 'start after reset',
+    'chat session', 'logs', 'stop', 'restart', 'chat session after restart', 'performance', 'stop again', 'reset', 'install after reset', 'start after reset',
     'stop after reset', 'events', 'done'];
   if (steps.length !== expected.length || steps.some((step, index) => step.step !== expected[index])) {
     return 'The app did not report the whole check, in order.';
@@ -132,6 +132,7 @@ function engineProblem(steps) {
     ['login', by.login.status === 303 && by.login.cookie === true],
     ['capabilities', by.capabilities.status === 200 && by.capabilities.v === 1 &&
       by.capabilities.platform === 'openharmony'],
+    ['chat session', by['chat session'].created === true && by['chat session after restart'].found === true],
     ['logs', Number.isSafeInteger(by.logs.entries) && by.logs.entries >= 0 &&
       Number.isSafeInteger(by.logs.through) && by.logs.through >= 0],
     ['stop', by.stop.phase === 'installed' && by['stop again'].phase === 'installed'],

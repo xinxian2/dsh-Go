@@ -2,6 +2,152 @@
 
 每个版本先中文、后英文。发版时把对应版本的正文（不含版本标题）作为 Release 正文，见 `docs/release.md`。
 
+## 1.1.0 · 2026-11-15
+
+### 中文
+
+- **语音：朗读、语音输入和语音通话。** 回复可以用 DeepSeek 的声音朗读，输入框可以说话输入，也可以直接和她语音通话。通话里能随时打断她，她会自己判断你说完了再接话，有实时字幕；「停顿多久算说完」可以选，默认多等一会儿。通话中可以换声音和识别方式。用账号登录时语音接口不认账号，会改用 API Key。
+- **酒馆：玩法包和做卡工具。** 新增玩法包；做卡时可以让 AI 改卡、挑着应用改动、看历史版本、看最终提示词，还能先试玩。长对话不再越聊越卡（显示、用量统计、读对话都快了很多）。支持工具回合和自定义模型渠道，数值可以手填；回复长到顶栏下面时顶栏会加遮罩。
+- **手机操控：悬浮条和不打扰模式。** 操控时屏幕边缘换成柔和的色带；悬浮条可以拖动、贴边，小球闲置时半藏在边上。不打扰模式选好通道、连上就能用，不再被一整套准入检查拦住；主屏读不到当前应用时改成确认一次，不再直接拒绝。
+- **使用统计 v3。** 新增酒馆、伙伴小屋、语音通话和 token 用量。
+- **桌宠更活泼。** 反应有多种动画，彩蛋在各种状态下都能触发，新增「搬东西」动作。
+- 其他新功能：创意工坊的投稿改用 GitHub 账号登录，默认连接 go.dshtui.com；自定义启动画面在填满模式下可以缩放和调整位置；新增九个界面特效。
+- **修复。** 进语音通话闪退；发给模型的内部提示不再出现在对话里；远程连接点「重连」立刻重连；伙伴小屋在旧版系统 WebView 上打不开、记忆保存的回包丢了列表不刷新；悬浮宠物在系统重新允许动画后不动；从系统设置打开实时活动回来后不补发；自动检查更新时中途关掉仍弹更新页；深色模式下分段选择器的滑块看不见；子代理都停了标题栏的忙碌点还在转；DeepSeek 图片附件丢失被当成网络错误。引擎运行时的 proot 升到 5.1.107.102（主要是硬链接模拟的修复）。
+- **验证情况。** 语音、悬浮条、不打扰模式和 proot 升级只在自动测试和编译检查里验证过，没有在真机上完整走过。遇到问题请导出诊断并开 issue。
+
+### English
+
+- **Voice: read aloud, voice input and voice calls.** Replies can be read aloud in DeepSeek's voice, you can dictate in the input box, or call her directly. During a call you can interrupt her at any time; she works out when you've finished before answering, with live captions. How long a pause counts as finished is adjustable and defaults to waiting a little longer. You can change the voice and the recognition method mid-call. When signed in with an account the speech service won't accept, it falls back to your API key.
+- **Tavern: play packs and card authoring.** Play packs are new. While making a card you can have the AI revise it, pick which changes to apply, browse past versions, see the final prompt and try it out first. Long chats no longer slow down as they grow (display, usage and loading are all much faster). Tool turns and custom model providers are supported, numbers can be typed in, and the top bar gets a scrim when a long reply scrolls under it.
+- **Phone control: overlay bar and Do Not Disturb.** The screen edge shows a soft band while the app is in control; the overlay bar can be dragged and docked to an edge, and the ball tucks half away when idle. Do Not Disturb works as soon as a channel is chosen and connected, without the old admission checks; when the home screen can't tell which app is in front, it asks you once instead of refusing.
+- **Usage stats v3.** Adds Tavern, the companion room, voice calls and token usage.
+- **Livelier pets.** Reactions have several animations, easter eggs trigger in every state, and there's a new carrying action.
+- Other new features: Creative Workshop submissions now sign in with GitHub, and the workshop connects to go.dshtui.com by default; a custom launch screen in fill mode can be zoomed and repositioned; nine new interface effects.
+- **Fixes.** A crash on entering a voice call; internal notes meant for the model no longer show up in the chat; Reconnect for remote connections reconnects right away; the companion room failing to open on older system WebViews, and its memory list not refreshing when a save reply was lost; the floating pet staying still after the system re-enables animations; the live activity not being re-posted after returning from system settings; the update page still appearing when an automatic check was turned off midway; the segmented control's thumb vanishing in dark mode; the busy dot in the title bar spinning after all sub-agents had stopped; a lost DeepSeek image attachment being reported as a network error. The engine runtime's proot is now 5.1.107.102 (mostly fixes to hard-link emulation).
+- **Testing.** Voice, the overlay bar, Do Not Disturb and the proot update have only been checked by automated tests and builds, not fully on a real phone. If you run into a problem, please export diagnostics and open an issue.
+
+## 1.0.16 · 2026-11-13
+
+### 中文
+
+- **酒馆：新的角色扮演模式。** 抽屉顶栏的「模式」键可以在工作、伙伴、酒馆之间切换，设置 › 界面 › 启动时进入可以选默认进哪个。兼容 SillyTavern 的角色卡、预设、世界书、正则和聊天记录：导入卡（文件、分享、卡站链接）或自己写一张；对话有气泡、小说、视觉小说三种排版，支持备选、接着写、帮我写、分支和书签；资源库里管理预设、世界书、正则、人设和快速回复。消息里的 HTML 在隔离的网页里显示，相关安全开关默认关。
+- **创意工坊。** 宠物设置和伙伴小屋的菜单里多了「创意工坊」：浏览、安装大家做的像素宠物和伙伴，不用登录；也可以投稿自己做的，先审后发，有问题的作品可以举报。投稿、查看自己的投稿和举报要用论坛账号，第一次会先说明会把什么发给工坊服务，同意后才发。
+- **悬浮伙伴。** 宠物的「App 外显示」可以选「小屋里的她」，让伙伴小屋的角色待在悬浮窗里。悬浮窗里点一下是互动，连点两下才打开对话（像素宠物也改成这样）；伙伴小屋会跟着手机倾斜和摇晃动。悬浮伙伴比像素宠物更耗电。
+- **tawcroot 加速启动（实验，默认关）。** 在 诊断 › 开发者选项 里打开后，本机引擎改用 tawcroot 启动：在测试手机上启动从约 5 秒降到约 1.5 秒，装包和 apt 也更快。起不来时自动改用原来的方式，不算启动失败；和「直接启动」二选一。关掉后的第一次启动会先把它留下的文件整理一遍。
+- **超长工具输出只显示头尾。** 几万行的命令输出不再把对话卡住：中间折叠，点「查看全部」在单独的页面里看全文，可以跳到开头或末尾、复制全部。
+- **酒馆后续：群聊和整页画布。** 可以建群聊，按发言人轮流，视觉小说按说话人换舞台。整页画布（酒馆设置里试用，默认关）能在隔离的网页里跑卡自带的 HTML 和脚本，兼容酒馆助手常用的接口；卡脚本要你输入或选按钮时用 App 自己的对话框。舞台面板可以播放卡里的音乐。每条回复显示按 DeepSeek 官方价估算的费用（高峰、低谷分开，节假日会算高一点），可以设单回合费用提醒，默认关。
+- **手机操控：后台屏和 Shell 连接能自己恢复。** 第一次连接失败后不再一直不可用，App 升级后不再复用旧服务；后台资源残留时也能完成释放，不再永久卡住（#1096、#1104）。手机操控页精简了：只显示当前缺的权限或连接步骤，Root、Sui 这类不常用的项需要时再展开，自检改成单独一页。
+- 其他新功能：可以删除已归档的会话；已安装插件可以筛选；自定义渠道支持自定义请求头（也用于模型发现）；SSH 主机支持认证后压缩和连接已有实例；更新窗口可以导出已下载的安装包，给需要自己重签的手机兜底；Shizuku 和本机 ADB 可以直接完成自更新；新对话首页的建议可以关掉。
+- **大量稳定性修复。** 这一版合入了一百多处运行时、桥接、媒体和更新流程的修复，主要是：直接启动模式下会话、附件、媒体和文件的落盘；磁盘满时的提示和恢复；请求中途断开、进程被杀后的恢复；日志和诊断包里的凭据打码；更新下载被重定向到另一个域名后超时不生效；带「保留」的重置不再丢掉硬链接过的文件内容。聊天、终端、插件、设置和无障碍另有约六十处修复。后来又合进一批：定时任务里「每月倒数第 N 个某天」「每周第 N 个工作日」和普通星期、序数星期混写时算错日期；Web 斜杠菜单里技能消失、改了默认预设后第一条消息仍用旧预设、Web 搜索 key 保存失败却当成功；进程中途被杀留下的空锁、空标记和自更新残留；开着 tawcroot 时升级引擎误报不兼容。
+- **验证情况。** 较早的一版测试包在一台手机（vivo X200 Pro，Android 16）上跑过一遍主要功能；之后合进来的后台屏连接重写、资源释放、酒馆群聊和整页画布，以及上面最后那批修复，没有在真机上验证过。大部分修复只经过自动测试和编译检查；直接启动在部分手机上（包括这台）仍会被系统拦下，届时自动改用兼容启动。遇到问题请导出诊断并开 issue。
+
+### English
+
+- **Tavern: a new role-play mode.** The Mode button in the drawer's top bar switches between Work, Companion and Tavern, and Settings › Interface › Open on start picks the default. It is compatible with SillyTavern character cards, presets, lorebooks, regex scripts and chat logs: import a card (file, share or card-site link) or write your own. Chats can be laid out as bubbles, a novel or a visual novel, with alternatives, continue, write-for-me, branches and bookmarks. The library manages presets, lorebooks, regex, personas and quick replies. HTML inside messages is shown in an isolated web view, and the related safety switches are off by default.
+- **Creative Workshop.** Pet settings and the companion room's menu now have Creative Workshop: browse and install pixel pets and companions others made, with no sign-in needed, or submit your own. Submissions are reviewed before they appear, and you can report a problem item. Submitting, viewing your submissions and reporting use your forum account; the first time, the app explains what it will send to the workshop service and only sends it after you agree.
+- **Floating companion.** A pet's Show outside the app can now be set to the companion from the room, so she stays in the floating window. In the floating window a single tap interacts and a double tap opens the chat (pixel pets work the same way now). The companion room also reacts to tilting and shaking the phone. The floating companion uses more battery than a pixel pet.
+- **tawcroot fast launch (experimental, off by default).** Turn it on under Diagnostics › Developer options and the local engine starts with tawcroot: on the test phone, startup went from about 5 seconds to about 1.5, and package installs and apt are faster too. If it can't start, the app falls back to the usual method, which doesn't count as a start failure. Only one of it and direct launch can be on. The first start after turning it off tidies up the files it left behind.
+- **Very long tool output shows only its start and end.** Command output tens of thousands of lines long no longer bogs the chat down: the middle is folded, and View all opens the full text on its own page, where you can jump to the start or end and copy everything.
+- **More Tavern: group chats and the full-page canvas.** You can start a group chat with speakers taking turns, and the visual novel layout changes the stage with the speaker. The full-page canvas (a trial switch in Tavern settings, off by default) runs a card's own HTML and scripts in an isolated web view and supports the Tavern Helper interfaces cards commonly use; when a card script asks you for input or a button, the app's own dialogs handle it. The stage panel can play a card's music. Each reply shows an estimated cost at DeepSeek's official prices (peak and off-peak priced separately; public holidays come out a little high), and you can set a per-turn cost alert, off by default.
+- **Phone control: the background screen and Shell connection recover on their own.** A first failed connection no longer leaves them unavailable, and an app update no longer reuses the old service. Leftover background resources can now be released instead of staying stuck (#1096, #1104). The phone control page is simpler: it shows only the permission or connection step that is missing, rarely used items such as Root and Sui expand when needed, and the self-check has its own page.
+- Other new features: archived chats can be deleted; installed plugins can be filtered; custom providers support custom request headers, also used for model discovery; SSH hosts support compression after authentication and connecting to an existing instance; the update sheet can export the downloaded package as a fallback for phones that need to re-sign it themselves; Shizuku and local ADB can complete self-updates directly; the suggestions on the new-chat start page can be turned off.
+- **Many stability fixes.** This version brings in over a hundred fixes to the runtime, bridge, media and update flow, mainly: how sessions, attachments, media and files are written in direct launch mode; messages and recovery when storage is full; recovery after a request is cut off or the process is killed; masking credentials in logs and diagnostics; the timeout not applying after an update download is redirected to another domain; and a reset that keeps your files no longer losing the contents of hard-linked files. Chat, terminal, plugins, settings and accessibility get about sixty more fixes. A later batch adds: scheduled tasks computing wrong dates for rules like the last-but-N weekday of a month, the Nth workday of a week, or plain and numbered weekdays mixed; skills vanishing from the web slash menu, the first message after changing the default preset still using the old one, and a failed web search key save being treated as success; empty locks, empty markers and self-update leftovers when the process is killed midway; and a false incompatibility report when upgrading the engine with tawcroot on.
+- **How this version was checked.** An earlier test build went through the main features on one phone (vivo X200 Pro, Android 16). What was merged after it, the rewritten background screen connection, resource release, Tavern group chats and the full-page canvas, and the last batch of fixes above, hasn't been tried on a real phone. Most fixes have only been through automated tests and compile checks. Direct launch is still blocked by the system on some phones (including that one), and the app then falls back to compatible launch. If you hit a problem, please export diagnostics and open an issue.
+
+## 1.0.15 · 2026-11-10
+
+### 中文
+
+- **从这一版起，更新引擎不再清空 Linux 环境。** 这次运行时又有改动，所以还是下整包；但更新时只替换 App 管理的引擎部分（DSH、Node、pnpm、桥接和它们的目录），用 `apt` 装的工具、默认位置的 npm 全局包、Python / pip 包、配置和工作区都会保留。从 1.0.14 升上来就生效。Node 版本变了时，第三方原生扩展仍可能要重新编译。
+- **如果更新停下来了，先别重置。** App 确认不了现有环境和新引擎兼容、更新清单损坏，或者旧进程没停干净时，会停止更新并说明原因，原环境原样保留。按提示重试；还不行就导出诊断并开 issue，不要重置环境或卸载 App。
+- **匿名使用统计多报两项：手机型号和厂商系统版本。** 型号是系统给的代号（如 `V2405A`），系统版本如 OriginOS 5.0、HyperOS 2.0，用来看问题集中在哪些机型和系统上。不含序列号、Android ID 这类能认出某一台手机的信息，仍可在「隐私与分享」里关掉。
+- **这一版没有在真机上验证过。** 上面这套保留环境的更新流程和扫码配对只经过自动测试和编译检查。遇到问题请开 issue 反馈。
+- 扫码配对电脑：修好相机打不开、从相册识码报 `MlKitContext has not been initialized` 的问题（#802）。扫码前会按需准备 ML Kit，不需要打开手机操控的「本机文字识别」，也不会改它的开关；SDK 出错和图里没有二维码会分开提示。
+- 引擎和运行环境：上一次启动迟到的日志不再混进这次的故障快照和诊断；停止和自动安全模式同时发生时，状态不会被旧的「正在停止」盖回去；停止后迟到的刷新不会把已撤掉的前台通知发回来；持久终端的就绪判断不再受系统时间跳变影响。
+- 通知和视频：审批点过、结果还没回来时重发的通知保留你的决定，显示「正在处理」，不再给按钮；上一次申请迟到的失焦回调不会再暂停刚恢复的视频。
+- 其他修复：永久删除对话时一并删掉迁移留下的临时正文；最近会话的桌面快捷方式迁移失败时保留旧入口，下次再试（#22）；Agent Team 冷恢复时，子 agent 已领取的初始输入不再被判失败（实验功能）。
+
+### English
+
+- **From this version on, updating the engine no longer wipes the Linux environment.** The runtime changed again, so this is still a full download, but an update now replaces only the engine parts the app manages (DSH, Node, pnpm, the bridge and their folders). Tools installed with `apt`, npm global packages in the default location, Python and pip packages, configuration and workspaces are kept. This already applies when updating from 1.0.14. When the Node version changes, third-party native extensions may still need rebuilding.
+- **If the update stops, don't reset.** When the app can't confirm the existing environment works with the new engine, the update manifest is damaged, or old processes haven't stopped, it stops the update, says why and leaves the environment as it was. Retry as it suggests; if it still fails, export diagnostics and open an issue rather than resetting the environment or uninstalling the app.
+- **Anonymous usage stats now include two more items: the phone model and the maker's system version.** The model is the code the system reports (such as `V2405A`), and the system version is something like OriginOS 5.0 or HyperOS 2.0; they show which phones and systems problems cluster on. Nothing that identifies a single phone, such as a serial number or Android ID, is included, and you can still turn the stats off in Privacy and sharing.
+- **This version hasn't been verified on a real phone.** The update flow that keeps the environment and pairing by scanning have only been through automated tests and compile checks. If you hit a problem, please open an issue.
+- Pair a computer by scanning: fixed the camera not opening and gallery scans failing with `MlKitContext has not been initialized` (#802). ML Kit is prepared on demand before scanning; you don't need to turn on the phone control's on-device text recognition, and its switch isn't changed. An SDK failure and an image with no QR code are now reported differently.
+- Engine and runtime: late log lines from the previous start no longer end up in this start's failure snapshot and diagnostics. When stopping and automatic safe mode happen together, an old Stopping state no longer overwrites the current one. A late refresh after stopping no longer brings back a foreground notification that was already removed. The persistent terminal's readiness checks are no longer thrown off by the system clock jumping.
+- Notifications and video: a notification re-sent after you answered an approval but before the result came back keeps your decision and shows Processing, with no buttons. A late focus-loss callback from an earlier request no longer pauses a video you just resumed.
+- Other fixes: deleting a chat for good also removes the temporary text left by migration. If moving the recent-chat home screen shortcuts fails, the old entry stays and it tries again later (#22). In Agent Team cold recovery, initial input a sub-agent had already taken is no longer marked failed (experimental feature).
+
+## 1.0.14 · 2026-11-09
+
+### 中文
+
+- **更新前请注意：这一版的运行时有更新，所以还是下整包。** 内置引擎仍是 DSH 0.2.2-rc.1，变的是我们给它打的补丁和桥接层。升级后 Linux 环境里只保留 `/root`，用 `apt` 装的软件和放在 `/usr/local`、`/opt` 等目录的文件需要重新装。对话和设置不受影响。
+- **这一版没有在真机上验证过。** 后台屏实时预览、多个后台任务、按截图坐标操作、本机文字识别、扫码配对和伙伴小屋的新功能都只经过自动测试和编译检查。遇到问题请开 issue 反馈。
+- **新权限和新组件：** App 新声明了相机权限，只在扫码配对电脑时用；不给权限也可以从相册识图或粘贴配对链接。手机操控内置了 Google ML Kit 中文文字识别，默认开启：识别在手机上完成，截图和文字不会发给 Google，但 Google 的 SDK 会收集机型、应用版本、耗时等使用统计。不想要可以在手机操控页或「隐私与分享」里关掉「本机文字识别（ML Kit）」，关掉后不会加载它。
+- 手机操控 · 多任务：每个对话的手机任务各自批准、暂停、停止。后台任务最多可以同时跑 3 个，在「不打扰模式」页的「后台任务上限」里设置，默认 1 个。悬浮条和通知上的停止、暂停、插话只作用于显示时的那个任务。
+- 手机操控 · 看和点：「不打扰模式」页可以打开「实时查看后台屏」（默认关），App 内和悬浮小窗都能看，只读，最多每秒 5 帧，画面不存盘。找不到控件时可以按截图坐标点击、长按和滑动：截图 30 秒内有效，窗口一切换就作废；同一任务里第一次这样操作某个应用要你许可，发送、支付、删除仍然每次确认。输入文字后会回读核对，对不上时如实报告。
+- 手机操控 · 技能和自检：任务成功后可以「存成技能」，起草时去掉联系人、号码、消息正文等个人信息，先预览、可修改，再装成 DSH 技能。手机操控页加了本机自检。
+- 伙伴小屋 · 鲸鱼娘：她现在随 App 一起装好，第一次进小屋时自动安置，不用再自己导入素材包。模型作者是 B 站「Mao绒绒家园」，经作者授权随 DSH Go 分发。
+- 伙伴小屋：菜单里的「主动邀请」换成「她多主动」，分安静、偶尔（默认）、常常、话多四档；别的对话跑完或出错时她提不提，在「她会提起什么」里分项开关。批准卡、提问卡和聊天记录在小屋里就能处理和翻看。日期、名字这些上下文不再写进你发出的消息里。完整模式可以打开自动想起记忆。
+- 伙伴小屋 · 导入模型：模型文件夹直接打成 zip 也能导入。模型自带的表情和动作能用了，可以在菜单「动作和表情」里试、起名、标成 AI 可以用。蒙版多的精细模型也能画对，旧手机上更流畅；导不了的旧模型会说清原因。缺适配的模型可以让你配好的 AI 帮她适配：只发参数名单，不发模型文件，可以撤销，也可以关掉自动适配。
+- 宠物：宠物选择里可以导入自己的像素宠物包，也能导入 Codex 宠物，转换后和原来不一样的地方会说明；长按自己导入的宠物可以删掉。
+- 远程：Remote 电脑上也能开终端，电脑上关了终端时会提示去哪里打开；会话「文件」页可以直接「传文件到电脑」。「扫码配对电脑」要等 Remote 服务器支持后入口才会出现，线上服务器目前还没开。
+- 诊断：诊断页可以在你逐次确认后采集系统输入法日志，帮助排查键盘自己收起的问题（#366）。只保留白名单里的事件，不记录输入内容和候选词。
+- 网页版：关掉「手机布局」看官方网页版时，标题行左边的返回按钮换成 App 标记（点它仍是返回），DSH Web 侧栏打开时自动让开；系统返回会先收起官方侧栏。
+- 其他修复：文件名清理后只剩空白时改用 `file`，上传不再被拒；宠物语音草稿和剪贴板预览截短时不拆开表情；锁屏时审批和分组摘要通知只显示公共标题；系统语音初始化失败后，下一次会重新创建；无障碍服务销毁后，迟到的连接不再重建悬浮层；远程主机换连接后，打开着的文件预览继续刷新（#465）；重新解包运行环境时补上 Android 附加组的组名（#159）。
+
+### English
+
+- **Before you update: this version changes the runtime, so it's a full download again.** The built-in engine is still DSH 0.2.2-rc.1; what changed are the patches we apply to it and the bridge layer. Only `/root` stays in the Linux environment, so software installed with `apt` and files in `/usr/local`, `/opt` and similar places need installing again. Chats and settings are kept.
+- **This version hasn't been verified on a real phone.** Live background preview, multiple background tasks, actions by screenshot coordinates, on-device text recognition, pairing by scanning and the new companion room features have only been through automated tests and compile checks. If you hit a problem, please open an issue.
+- **New permission and new component:** the app now declares the camera permission, used only to scan when pairing a computer; without it you can still read the code from a gallery image or paste the pairing link. Phone control now bundles Google ML Kit Chinese text recognition, on by default. Recognition runs on the phone and screenshots and text are not sent to Google, but Google's SDK collects usage statistics such as device model, app version and timing. If you don't want it, turn off On-device text recognition (ML Kit) on the phone control page or in Privacy and sharing; once off, it isn't loaded.
+- Phone control, multiple tasks: each chat's phone task is approved, paused and stopped on its own. Up to 3 background tasks can run at once; set it under Background task limit on the Non-disruptive mode page (default 1). Stop, pause and interject on the floating bar and the notification act only on the task they were showing.
+- Phone control, seeing and tapping: on the Non-disruptive mode page you can turn on Live background preview (off by default) to watch the background screen in the app or in a small floating window. It's view-only, at most 5 frames a second, and frames aren't saved. When no control can be found, the agent can tap, long-press and swipe by screenshot coordinates: a screenshot is valid for 30 seconds and is dropped as soon as the window changes. The first such action on an app within a task asks you; sending, paying and deleting still ask every time. Typed text is read back, and a mismatch is reported as it is.
+- Phone control, skills and self-check: after a task succeeds you can Save as a skill. The draft leaves out contacts, numbers, message text and other personal details, and you can preview and edit it before it's installed as a DSH skill. The phone control page has a local self-check.
+- Companion room, the whale girl: she now comes with the app and settles in the first time you open the room, so there's no pack to import. The model is by Mao绒绒家园 on Bilibili and is distributed with DSH Go with the author's permission.
+- Companion room: the menu's invitation switch is now How often she speaks up, with four levels: Quiet, Now and then (default), Often and Chatty. Whether she mentions another chat finishing or failing is set item by item under What she brings up. Approval cards, question cards and the chat history can be handled and read right in the room. Context such as the date and your name is no longer written into the messages you send. Full mode can turn on automatic memory recall.
+- Companion room, importing models: a zipped model folder can be imported as is. A model's own expressions and motions now work; try them, name them and mark them as usable by the AI under Moves and faces in the menu. Detailed models with many masks draw correctly, older phones run smoother, and an old model that can't be imported says why. A model that needs fitting can be adapted by the AI you configured: only the parameter list is sent, never the model files, and you can undo it or turn automatic fitting off.
+- Pets: the pet picker can import your own pixel pet pack, and Codex pets too, with a note on anything that came out different from the original. Long-press a pet you imported to delete it.
+- Remote: you can open a terminal on a Remote computer (if terminals are turned off on the computer, the app says where to turn them on), and a session's Files page can Send files to the computer directly. Pair a computer by scanning only appears once the Remote server supports it; the public server hasn't turned it on yet.
+- Diagnostics: after you confirm each time, the diagnostics page can collect system keyboard logs to help track down the keyboard closing on its own (#366). Only allowlisted events are kept; typed text and suggestions are never recorded.
+- Web: with the phone layout off on the official web page, the back button at the left of the title row is now the app mark (tapping it still goes back), and it moves out of the way when the DSH Web sidebar opens. System back closes the official sidebar first.
+- Other fixes: a file name left blank after cleaning falls back to `file`, so uploads are no longer refused. Pet voice drafts and clipboard previews no longer split emoji when shortened. On the lock screen, approval and grouped summary notifications show only a public title. System text-to-speech is created again after it failed to start. A late connection to an accessibility service that was already destroyed no longer rebuilds the overlay. Open file previews keep refreshing after the remote host switches connections (#465). Unpacking the runtime environment again restores the group names for Android's supplementary groups (#159).
+
+## 1.0.13 · 2026-11-08
+
+### 中文
+
+- **更新前请注意：这一版的运行时有更新，所以还是下整包。** 内置引擎仍是 DSH 0.2.2-rc.1，变的是我们给它打的补丁。升级后 Linux 环境里只保留 `/root`，用 `apt` 装的软件和放在 `/usr/local`、`/opt` 等目录的文件需要重新装。对话和设置不受影响。
+- **这一版没有在真机上验证过。** App 内的视频播放和存视频到相册只经过自动测试和编译检查，没在手机上放过。遇到问题请开 issue 反馈。
+- 新对话首页：建议换成横排小卡片，下面一行小技巧会自动轮换，点一下换下一条。首页就能选这次对话的模型、Agent 预设和权限，第一条消息发出前生效；设置失败时消息不会发出，留在输入框里。
+- 视频：点视频在 App 内播放，可以播放、暂停和拖动进度，放不了时仍能用其他应用打开；视频也能保存到相册。没有封面的本机视频会取首帧当封面，远程视频只在你主动打开时才下载。
+- 图片：加载失败时可以点「重新加载」，只重新读取文件，不会重新生成，也不会再收生成费用。
+- 图像与视频设置：API 地址填根地址，编辑时可以预览请求地址；换站点或跨站点复用 Key 要先确认。「检查已保存配置」只检查配置本身，不联网验证 Key、余额或模型权限。
+- 计划模式：重新打开对话后恢复之前选的计划模式，后面的命令失败也不会把它清掉。
+- 手机操控：停止或换任务后，旧任务不会再启动应用、按键、点击或滚动；后台屏画面过期时会拒绝操作并要求刷新；横向列表的手势方向不再反；太短的滑动直接拒绝；所选模式和实际的 Shizuku / Sui 不一致时不再报就绪，并说明原因。
+- 远程：迟到的退出登录不会再删掉新登录的凭据，旧的登录动作不会切到你后来选的服务器；自建服务器邮箱登录时连按完成键不再重复提交；较大的设置写入不再执行两次。
+- 引擎：启动失败时先显示正在停止，并优先显示这次的原因；引擎服务没就绪不再被说成版本不支持；运行环境安装失败页可以直接导出诊断包；工作区索引损坏时可以改用独立的救援索引；插件安装输出里的中文和 emoji 不再乱码（#658）；空闲时排队的通知不再挡住永久删除对话（#687）；坏掉的 Agent 预设会显示实际的加载失败原因（#75）。
+- 运行环境：重置前确认相关进程都已退出；升级中途被打断时保留要带走的用户文件。安全模式移走危险文件只完成一部分时会如实报告，可以重试剩下的。
+- 文件和分享：很长的文件名按字节截短，不会切开表情，也保留扩展名。
+- 插件开发：插件省略能力参数时按 v1 的默认处理，不再当成空列表（#656）。
+
+### English
+
+- **Before you update: this version changes the runtime, so it's a full download again.** The built-in engine is still DSH 0.2.2-rc.1; what changed are the patches we apply to it. Only `/root` stays in the Linux environment, so software installed with `apt` and files in `/usr/local`, `/opt` and similar places need installing again. Chats and settings are kept.
+- **This version hasn't been verified on a real phone.** In-app video playback and saving videos to the gallery have only been through automated tests and compile checks, never played on a phone. If you hit a problem, please open an issue.
+- New chat page: suggestions are now small cards side by side, with a tip line below that changes on its own; tap it for the next tip. You can pick this chat's model, Agent preset and permissions right on the page; they apply before the first message is sent, and if applying them fails the message stays in the composer instead of going out.
+- Video: tap a video to play it in the app, with play, pause and seeking; if it won't play you can still open it in another app. Videos can be saved to the gallery too. A local video with no poster uses its first frame; a remote video is downloaded only when you open it.
+- Images: when an image fails to load you can tap Reload. It only reads the file again; it doesn't regenerate or charge for generation again.
+- Image and video settings: enter the API root as the address, and preview the request address while editing. Switching sites or reusing a key across sites asks first. Check saved configuration checks only the configuration; it doesn't go online to verify the key, balance or model access.
+- Plan mode: reopening a chat restores the plan mode you chose, and a later command failing no longer clears it.
+- Phone control: once a task stops or is replaced, the old one no longer launches apps, presses keys, taps or scrolls. Actions on a stale background screen are refused with a request to refresh. Gestures on horizontal lists no longer go the wrong way, swipes too short to register are refused, and when the selected mode doesn't match the actual Shizuku or Sui provider it no longer reports ready and says why.
+- Remote: a late sign-out no longer deletes the credentials of a newer sign-in, and an old sign-in action no longer switches to a server you picked later. Pressing Done repeatedly while signing in by email on a self-hosted server no longer submits twice, and large settings writes no longer run twice.
+- Engine: a failed start shows that it's stopping first and puts this attempt's reason ahead of older failures. An engine service that isn't ready is no longer reported as an unsupported version. The runtime install failure page can export a diagnostics bundle directly. A damaged workspace index can be swapped for a separate rescue index. Chinese and emoji in plugin install output are no longer garbled (#658). Notifications queued while idle no longer block deleting a chat for good (#687). A broken Agent preset shows the actual reason it failed to load (#75).
+- Runtime environment: a reset first makes sure the related processes have exited, and an upgrade interrupted halfway keeps the user files it was carrying over. When safe mode moves dangerous files away and only part of it succeeds, it says so and you can retry the rest.
+- Files and sharing: very long file names are shortened by bytes without splitting emoji, and keep their extension.
+- Plugin development: a plugin that leaves out the capabilities parameter gets the v1 default instead of an empty list (#656).
+
 ## 1.0.12 · 2026-11-07
 
 ### 中文
@@ -299,12 +445,12 @@
 ### 中文
 
 - DSH Remote 更省流量：会话列表不再在每次对话状态变化时整份重新下载；App 切到后台 30 秒后，进行中的对话暂停逐字推送，回到前台时一次同步到最新（会短暂显示同步中）；连接有数据往来时不再额外发送检测请求，网络慢时也不容易误判断线、反复重连。
-- DSH Remote 跟进 ds-harness-remote 的最新协议：主机插件更新到 0.6.0 后，远程流量会改走服务器分配的独立中继节点，减轻主服务器的压力；协议校验也和上游保持一致。感谢 DSH Remote 作者李国宝。
+- DSH Remote 跟进 ds-harness-remote 的最新协议：主机插件更新到 0.6.0 后，远程流量会改走服务器分配的独立中继节点，减轻主服务器的压力；协议校验也和上游保持一致。
 
 ### English
 
 - DSH Remote uses less data: the session list is no longer downloaded in full every time a chat changes state; 30 seconds after DSH Go goes to the background, a running chat stops streaming word by word and catches up in one go when you return (it shows syncing briefly); and the connection no longer sends extra health checks while data is flowing, so a slow network is less likely to look like a drop and reconnect over and over.
-- DSH Remote follows the latest ds-harness-remote protocol: once the Host plugin is on 0.6.0, remote traffic moves to a separate Relay node assigned by the server, taking load off the main server; protocol checks match upstream too. Thanks to liguobao, the author of DSH Remote.
+- DSH Remote follows the latest ds-harness-remote protocol: once the Host plugin is on 0.6.0, remote traffic moves to a separate Relay node assigned by the server, taking load off the main server; protocol checks match upstream too.
 
 ## 1.0.1 · 2026-10-30
 

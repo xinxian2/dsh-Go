@@ -43,9 +43,9 @@ jobs:
           # The paths outside each area's own are files its tests read.
           filters: |
             ci: &ci .github/workflows/ci.yml
-            app: [*ci, 'app/**', 'packages/**', 'sdk/plugin-kit/**', 'site/share/**', 'docs/guide/**', 'THIRD_PARTY_NOTICES.md']
+            app: [*ci, 'app/**', 'packages/**', 'sdk/plugin-kit/**', 'site/share/**', 'docs/guide/**', 'THIRD_PARTY_NOTICES.md', 'tooling/fixtures/diagnostic-redaction.json']
             packages: [*ci, 'packages/**']
-            runtime: [*ci, 'runtime/**', 'examples/**', 'sdk/plugin-kit/**', 'app/tool/engine_auth/**', 'app/test/plugin_config/fixtures/**', 'app/test/media/fixtures/**']
+            runtime: [*ci, 'runtime/**', 'tooling/ohos/**', 'examples/**', 'sdk/plugin-kit/**', 'app/tool/engine_auth/**', 'app/test/plugin_config/fixtures/**', 'app/test/media/fixtures/**', 'app/android/app/src/main/kotlin/io/github/ccch1mneyyy/dsh_app/runtime/SafeMode.kt']
 
   checks:
     name: Generated files, tooling, SDK, web
@@ -76,6 +76,8 @@ jobs:
           for dir in tooling runtime/tests app/tool; do
             "$RUNNER_TEMP/venv/bin/python" -m unittest discover -s "$dir" -p 'test_*.py'
           done
+      - name: OHOS gate runner contract
+        run: python3 tooling/ohos/tests/run-gates.test.py
       - name: Plugin SDK
         working-directory: sdk/plugin-kit
         run: |
@@ -145,6 +147,14 @@ jobs:
         run: |
           sudo install -Dm644 -t "$DSH_TEST_FONT_DIR" ~/test-fonts/NotoSansCJK-*.ttc
           sudo install -Dm644 ~/test-fonts/NotoColorEmoji.ttf /usr/share/fonts/noto/NotoColorEmoji.ttf
+      - name: Install account shells for SSH bootstrap tests
+        run: |
+          if find test -name '*_test.dart' | sort | awk 'NR % 3 == ${{ matrix.shard }} && $0 == "test/remote/ssh_start_completion_test.dart" { found = 1 } END { exit !found }'; then
+            if [ '${{ steps.fonts.outputs.cache-hit }}' = 'true' ]; then
+              sudo apt-get update -q
+            fi
+            sudo apt-get install -y --no-install-recommends fish zsh
+          fi
       - run: flutter pub get --enforce-lockfile
       - name: Analyze, and generated localization matches its source
         if: matrix.shard == 0
@@ -176,9 +186,24 @@ jobs:
       - *checkout
       - *flutter
       - run: |
-          for pkg in packages/dsh_client packages/dsh_remote; do
+          for pkg in packages/dsh_client packages/dsh_remote packages/dsh_tavern; do
             (cd "$pkg" && dart pub get --enforce-lockfile && dart analyze && dart test)
           done
+      - name: Install OpenSSH for transport interoperability tests
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends openssh-server
+          sudo mkdir -p /run/sshd
+      - name: SSH compression and OpenSSH interoperability
+        working-directory: packages/dartssh2
+        env:
+          SSH_COMPRESSION_TEST: 1
+          PUB_HOSTED_URL: https://pub.dev
+        run: |
+          dart pub get
+          dart analyze
+          dart test
+          dart test --platform chrome test/src/ssh_compression_web_test.dart
 
   runtime:
     name: Runtime and bridge
@@ -191,7 +216,16 @@ jobs:
     steps:
       - *checkout
       - *node
+      - name: Restore the patched DSH and pnpm prefixes
+        id: runtime-prefixes
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/dsh
+            ${{ runner.temp }}/pnpm
+          key: runtime-prefixes-v1-${{ runner.os }}-${{ runner.arch }}-node${{ env.NODE_VERSION }}-${{ hashFiles('.github/workflows/ci.yml', 'runtime/locks/**/package*.json', 'runtime/patches/**', 'runtime/session-deletion/**', 'runtime/lib/rtbuild.py', 'runtime/build-runtime.sh') }}
       - name: Install a throwaway patched DSH
+        if: steps.runtime-prefixes.outputs.cache-hit != 'true'
         run: |
           version=$(sed -nE 's/^DSH_VERSION="\$\{DSH_VERSION:-(.+)\}"$/\1/p' runtime/build-runtime.sh)
           prefix="$RUNNER_TEMP/dsh"
@@ -205,6 +239,19 @@ jobs:
           mkdir "$pnpm_prefix"
           cp "runtime/locks/pnpm-$pnpm_version/package.json" "runtime/locks/pnpm-$pnpm_version/package-lock.json" "$pnpm_prefix/"
           npm ci --prefix "$pnpm_prefix" --ignore-scripts --no-audit --no-fund
+      # Save before tests: some tests deliberately modify their disposable prefix.
+      - name: Save the prepared prefixes
+        if: steps.runtime-prefixes.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ runner.temp }}/dsh
+            ${{ runner.temp }}/pnpm
+          key: ${{ steps.runtime-prefixes.outputs.cache-primary-key }}
+      - name: Export the runtime test paths
+        run: |
+          prefix="$RUNNER_TEMP/dsh"
+          pnpm_prefix="$RUNNER_TEMP/pnpm"
           {
             echo "DSH_PREFIX=$prefix"
             echo "DSH_TEST_PREFIX=$prefix"

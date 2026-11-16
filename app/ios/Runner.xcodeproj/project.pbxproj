@@ -95,6 +95,31 @@
 		D5480000000000000000F008 /* GuestKernelAccess.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5480000000000000000F007 /* GuestKernelAccess.swift */; };
 		D5480000000000000000F00A /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D5480000000000000000F009 /* libsqlite3.tbd */; };
 		D5480000000000000000F00C /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = D5480000000000000000F00B /* libz.tbd */; };
+		D55100000000000000000011 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D55100000000000000000002;
+		};
+		D55100000000000000000012 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D55100000000000000000002;
+		};
+		D55100000000000000000013 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D55100000000000000000003;
+		};
+		D55100000000000000000014 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D55100000000000000000001;
+		};
+		D55100000000000000000015 /* PBXBuildFile */ = {
+			isa = PBXBuildFile;
+			fileRef = D55100000000000000000004;
+			settings = {
+				ATTRIBUTES = (
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -111,6 +136,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = D5480000000000000000B010;
 			remoteInfo = ShareExtension;
+		};
+		D55100000000000000000016 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D;
+			remoteGlobalIDString = D55100000000000000000020;
+			remoteInfo = CompanionWidget;
+			proxyType = 1;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -131,6 +163,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
+				D55100000000000000000015,
 				D5480000000000000000B008 /* ShareExtension.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
@@ -233,6 +266,49 @@
 		D5480000000000000000F007 /* GuestKernelAccess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestKernelAccess.swift; sourceTree = "<group>"; };
 		D5480000000000000000F009 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
 		D5480000000000000000F00B /* libz.tbd */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.text-based-dylib-definition; name = libz.tbd; path = usr/lib/libz.tbd; sourceTree = SDKROOT; };
+		D55100000000000000000001 /* CompanionWidget.swift */ = {
+			path = CompanionWidget.swift;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000002 /* CompanionSnapshot.swift */ = {
+			path = CompanionSnapshot.swift;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000003 /* IOSCompanionWidget.swift */ = {
+			path = IOSCompanionWidget.swift;
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000004 /* CompanionWidget.appex */ = {
+			path = CompanionWidget.appex;
+			isa = PBXFileReference;
+			lastKnownFileType = "wrapper.app-extension";
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		D55100000000000000000005 /* Info.plist */ = {
+			path = Info.plist;
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000006 /* CompanionWidget.entitlements */ = {
+			path = CompanionWidget.entitlements;
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000007 /* CompanionWidget.xcconfig */ = {
+			path = CompanionWidget.xcconfig;
+			isa = PBXFileReference;
+			lastKnownFileType = text.xcconfig;
+			sourceTree = "<group>";
+		};
+		D55200000000000000000001 /* ShareExtension.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = ShareExtension.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -247,6 +323,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D5480000000000000000B00F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D55100000000000000000022 /* PBXFrameworksBuildPhase */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -307,6 +390,7 @@
 		97C146E51CF9000F007C117D = {
 			isa = PBXGroup;
 			children = (
+				D55100000000000000000010,
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
@@ -319,6 +403,7 @@
 		97C146EF1CF9000F007C117D /* Products */ = {
 			isa = PBXGroup;
 			children = (
+				D55100000000000000000004,
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 				D5480000000000000000E002 /* PhoneRunnerUITests.xctest */,
@@ -330,6 +415,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				D55100000000000000000003,
 				A08400000000000000000001 /* UnicodeData-LICENSE.txt */,
 				D55000000000000000000300 /* IOSPhonePairingStore.swift */,
 				D55000000000000000000302 /* IOSPhoneDDI.swift */,
@@ -396,12 +482,25 @@
 		D5480000000000000000B011 /* ShareExtension */ = {
 			isa = PBXGroup;
 			children = (
+				D55200000000000000000001 /* ShareExtension.xcconfig */,
 				D5480000000000000000B002 /* ShareViewController.swift */,
 				D5480000000000000000B004 /* ShareInbox.swift */,
 				D5480000000000000000B00C /* Info.plist */,
 				D5480000000000000000B00D /* ShareExtension.entitlements */,
 			);
 			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		D55100000000000000000010 /* CompanionWidget */ = {
+			path = CompanionWidget;
+			isa = PBXGroup;
+			children = (
+				D55100000000000000000007,
+				D55100000000000000000001,
+				D55100000000000000000002,
+				D55100000000000000000005,
+				D55100000000000000000006,
+			);
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -456,6 +555,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				D55100000000000000000017,
 				D5480000000000000000B015 /* PBXTargetDependency */,
 			);
 			name = Runner;
@@ -482,6 +582,23 @@
 			productName = ShareExtension;
 			productReference = D5480000000000000000B009 /* ShareExtension.appex */;
 			productType = "com.apple.product-type.app-extension";
+		};
+		D55100000000000000000020 /* CompanionWidget */ = {
+			buildConfigurationList = D55100000000000000000024;
+			productReference = D55100000000000000000004;
+			productType = "com.apple.product-type.app-extension";
+			productName = CompanionWidget;
+			isa = PBXNativeTarget;
+			buildPhases = (
+				D55100000000000000000021,
+				D55100000000000000000022,
+				D55100000000000000000023,
+			);
+			dependencies = (
+			);
+			name = CompanionWidget;
+			buildRules = (
+			);
 		};
 /* End PBXNativeTarget section */
 
@@ -520,6 +637,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+				D55100000000000000000020,
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 				D5480000000000000000E001 /* PhoneRunnerUITests */,
@@ -552,6 +670,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		D5480000000000000000B014 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D55100000000000000000023 /* PBXResourcesBuildPhase */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -665,6 +790,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				D55100000000000000000013,
+				D55100000000000000000011,
 				D55000000000000000000301 /* IOSPhonePairingStore.swift in Sources */,
 				D55000000000000000000303 /* IOSPhoneDDI.swift in Sources */,
 				D55000000000000000000305 /* IOSPhoneCoreDevice.swift in Sources */,
@@ -726,6 +853,15 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		D55100000000000000000021 /* PBXSourcesBuildPhase */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D55100000000000000000012,
+				D55100000000000000000014,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -738,6 +874,11 @@
 			isa = PBXTargetDependency;
 			target = D5480000000000000000B010 /* ShareExtension */;
 			targetProxy = D5480000000000000000B00A /* PBXContainerItemProxy */;
+		};
+		D55100000000000000000017 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = D55100000000000000000020;
+			targetProxy = D55100000000000000000016;
 		};
 /* End PBXTargetDependency section */
 
@@ -1140,7 +1281,7 @@
 		};
 		D5480000000000000000B016 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 9740EEB21CF90195004384FC /* Debug.xcconfig */;
+			baseConfigurationReference = D55200000000000000000001 /* ShareExtension.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;
@@ -1164,7 +1305,7 @@
 		};
 		D5480000000000000000B017 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 7AFA3C8E1D35360C0083082E /* Release.xcconfig */;
+			baseConfigurationReference = D55200000000000000000001 /* ShareExtension.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;
@@ -1188,7 +1329,7 @@
 		};
 		D5480000000000000000B018 /* Profile */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 7AFA3C8E1D35360C0083082E /* Release.xcconfig */;
+			baseConfigurationReference = D55200000000000000000001 /* ShareExtension.xcconfig */;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CLANG_ENABLE_MODULES = YES;
@@ -1207,6 +1348,78 @@
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Profile;
+		};
+		D55100000000000000000025 /* Debug */ = {
+			baseConfigurationReference = D55100000000000000000007;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = CompanionWidget/Info.plist;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				CODE_SIGN_ENTITLEMENTS = CompanionWidget/CompanionWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				SWIFT_VERSION = 5.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ccch1mneyyy.dshgo.CompanionWidget;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+			};
+			name = Debug;
+		};
+		D55100000000000000000026 /* Release */ = {
+			baseConfigurationReference = D55100000000000000000007;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = CompanionWidget/Info.plist;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				CODE_SIGN_ENTITLEMENTS = CompanionWidget/CompanionWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				SWIFT_VERSION = 5.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ccch1mneyyy.dshgo.CompanionWidget;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
+			};
+			name = Release;
+		};
+		D55100000000000000000027 /* Profile */ = {
+			baseConfigurationReference = D55100000000000000000007;
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				MARKETING_VERSION = "$(FLUTTER_BUILD_NAME)";
+				INFOPLIST_FILE = CompanionWidget/Info.plist;
+				SKIP_INSTALL = YES;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				CODE_SIGN_ENTITLEMENTS = CompanionWidget/CompanionWidget.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				SWIFT_VERSION = 5.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ccch1mneyyy.dshgo.CompanionWidget;
+				CURRENT_PROJECT_VERSION = "$(FLUTTER_BUILD_NUMBER)";
 			};
 			name = Profile;
 		};
@@ -1262,6 +1475,16 @@
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
+		};
+		D55100000000000000000024 /* XCConfigurationList */ = {
+			isa = XCConfigurationList;
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+			buildConfigurations = (
+				D55100000000000000000025,
+				D55100000000000000000026,
+				D55100000000000000000027,
+			);
 		};
 /* End XCConfigurationList section */
 

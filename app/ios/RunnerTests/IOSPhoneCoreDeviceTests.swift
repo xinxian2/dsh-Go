@@ -34,6 +34,7 @@ final class IOSPhoneCoreDeviceTests: XCTestCase {
     let handle: UInt64
     let id: UInt64
     let operation: String
+    let parameters: [String: Any]
     let result: IOSPhoneCoreDevice.ResultSink
     func dispatched() {
       result(handle, id, 0,
@@ -62,7 +63,7 @@ final class IOSPhoneCoreDeviceTests: XCTestCase {
       }, request: { [self] handle, id, data, callback in
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let operation = object["op"] as? String else { return 1 }
-        let call = Invocation(handle: handle, id: id, operation: operation, result: callback)
+        let call = Invocation(handle: handle, id: id, operation: operation, parameters: object, result: callback)
         requests.append(call)
         beforeRequestReturns?(call)
         return 0
@@ -175,6 +176,40 @@ final class IOSPhoneCoreDeviceTests: XCTestCase {
     XCTAssertFalse(value.owner.maySwitchBackend)
     value.native.launches[0].stopped()
     XCTAssertTrue(value.owner.maySwitchBackend)
+  }
+
+  func testCompletionReturnUsesOnlyTheOwnedConnectionAndTheContainingApp() async throws {
+    let value = try await readyFixture()
+    value.native.beforeRequestReturns = { $0.dispatched() }
+    let accepted = await value.owner.returnToApp(ownerID: "owner-a", current: { true })
+    XCTAssertTrue(accepted)
+    XCTAssertEqual(value.native.launches.count, 1)
+    XCTAssertEqual(value.native.requests.count, 1)
+    let call = try XCTUnwrap(value.native.requests.first)
+    XCTAssertEqual(call.operation, "launch")
+    XCTAssertEqual(Set(call.parameters.keys), ["op", "bundleId"])
+    XCTAssertEqual(call.parameters["bundleId"] as? String, Bundle.main.bundleIdentifier)
+    XCTAssertTrue(value.native.stops.isEmpty)
+  }
+
+  func testCompletionReturnDoesNotPrepareOrDispatchForAnUnownedOrRetiredTask() async throws {
+    let value = try await readyFixture()
+    let unowned = await value.owner.returnToApp(ownerID: "other-owner", current: { true })
+    let retired = await value.owner.returnToApp(ownerID: "owner-a", current: { false })
+    XCTAssertFalse(unowned)
+    XCTAssertFalse(retired)
+    XCTAssertTrue(value.native.requests.isEmpty)
+    XCTAssertEqual(value.native.launches.count, 1)
+  }
+
+  func testCompletionReturnDoesNotRecreateAStoppedConnection() async throws {
+    let value = try await readyFixture()
+    value.owner.stop(ownerID: "owner-a")
+    value.native.launches[0].stopped()
+    let accepted = await value.owner.returnToApp(ownerID: "owner-a", current: { true })
+    XCTAssertFalse(accepted)
+    XCTAssertTrue(value.native.requests.isEmpty)
+    XCTAssertEqual(value.native.launches.count, 1)
   }
 
   func testStartBorrowsSeparatePairingBytesWithoutClearingTheStoredSessionRecord() async throws {

@@ -48,7 +48,7 @@ flutter build ios --release --no-codesign
 `tooling/ios/build-ish.sh iphoneos OUTPUT_DIR`（或 `iphonesimulator`）从固定的
 `OpenMinis/ish-arm64` 提交下载源码，核对 SHA256 后打 `tooling/ios/ish/build.patch`，
 生成未签名的 `DshGuest.framework`。上游源码和工具链缓存不进仓库。
-本补丁**未在 Apple 上编译**，首次真实验证由 `iOS compile` 的 `engine` 任务执行。
+本分支已使用 Xcode 26.2 编译设备和模拟器 framework；模拟器真实内核的 Python 与文件系统回归见下文。编译通过不代表所有 iPhone 操作都已验证。
 
 Mac 首次构建还需 LLVM（生成 ARM64 Linux VDSO）、独立 lld、Meson 和 Ninja；CI 使用
 Meson 1.7.2、Ninja 1.11.1.4。可运行 `brew install llvm lld meson ninja`，并将
@@ -83,21 +83,23 @@ python3 tooling/ios/tests/guest-admission.test.py -v
 
 票据与真实 worker 集成测试另需从 `runtime/locks/dsh-0.2.2-rc.1/` 安装的独立 npm 前缀；先安装 `runtime/ohos/node/build-tools` 的锁定依赖并运行 `node runtime/ohos/process/build-rg-regex.mjs`，再按 [runtime.test.mjs](../../tooling/ios/guest-tests/runtime.test.mjs) 的启动说明运行。该测试使用真实工具、审批、Worker 和生成的 override，但 native 通道只记录请求，不运行 iSH；JIT 与 `--jitless` 分别验证。真机还应分别在只读、工作区可写和完全权限会话里测试独立环境探测、包管理、普通管道、Node Worker 及混合脚本拒绝。
 
+Python 的原生文件系统回归见 [guest-mmap.md](../../tooling/ios/engine-smoke/guest-mmap.md)。2026-11-11 已在 iOS 模拟器的真实 DshGuest 内核、独立 Alpine 3.24.4 根目录验证 Python 3.14.10 和 pip 26.1.2：普通安装、从 `/workspace` 加载 libpython/扩展模块、文件与目录复制、权限/时间戳、跨挂载移动、临时目录清理，以及离线 pip 安装并导入 six 1.17.0。修复涵盖 musl 的超出文件长度预留映射、guest EOF 页面 SIGBUS，以及这些文件系统操作；仍保留只读挂载、硬链接和特殊权限位限制。模拟器结果不等于上述操作已在 iPhone 真机全部复验。
+
 ## 现状
 
-- CI 会在 iOS 模拟器上真跑：真 NodeMobile 的工具回合、取消、停止和恢复会话；停止时不误关别人的 fd；真 App 里的安装、启动、登录、停止、重启和重置；真 App 启动后 30 秒还活着；在 App 进程里真调用提醒、联系人、定位、OCR 和网页操作，只有点确认框是测试代点的（`RunnerTests`，选图除外）。上述 CI 运行门是 Debug 构建。2026-11-06 一台 iPad Air 5（iPadOS 18.7.7）装了自签的 Release 包：App 三次冷启动都正常，本机引擎在加载没签名的 addon 时失败，addon 因此改成了 framework，改后还没在真机上跑过。这不说明 iPhone 上 TestFlight 包的白屏已经解决，下面的验收项也还没做。
+- CI 会在 iOS 模拟器上真跑：真 NodeMobile 的工具回合、取消、停止和恢复会话；停止时不误关别人的 fd；真 App 里的安装、启动、登录、停止、重启和重置；真 App 启动后 30 秒还活着；在 App 进程里真调用提醒、联系人、定位、OCR 和网页操作，只有点确认框是测试代点的（`RunnerTests`，选图除外）。上述 CI 运行门是 Debug 构建。2026-11-06 一台 iPad Air 5（iPadOS 18.7.7）装了自签的 Release 包：App 三次冷启动都正常，本机引擎在加载没签名的 addon 时失败，addon 因此改成了 framework。此后本分支已在 iPhone 13 / iOS 26.0 覆盖安装并运行本机对话；这不代表 TestFlight 白屏或下表全部项目已经验证。
 - 本机引擎和鸿蒙共用基础层（`runtime/ohos/`）：同进程的 Node（NodeMobile 24.22.1，`--jitless`）。未安装可选 Linux 时，命令由 just-bash 模拟，没有 Linux 或 Python；安装并启用后按上面的 guest 契约运行，软件包以 guest 实际安装情况为准，仍不能任意启动 iOS 宿主进程。基础引擎首次安装解压约 160 MB；可选 Linux 另占空间。引擎第一次启动时才加载，只连远程的人不占这份内存。
 - 和鸿蒙不同：停止后能原地再启动，不用重开应用（`runtime/ios/host/node_runner.cc`）。
 - 和鸿蒙不同：本机引擎能处理图片。sharp 在这里装不了，所以 `runtime/ios/image/ios-sharp.cjs` 替代它，像素走系统的 ImageIO（`runtime/ios/host/image_binding.cc`），附件库自己的规则不变。ImageIO 写不了 WebP，所以带透明的图存 PNG，比目标大时压不下去（只影响透明图）。校验和缩放都走缩略图路径，大图的像素不用全部放进内存，但实际峰值还没在设备上量过。
 - App 切到后台后，系统很快会暂停引擎；后台的本地监听被回收时，回到前台会自动重启引擎。iOS 26 以上，本机正在跑的一轮会向系统申请继续运行（`BGContinuedProcessingTask`），系统同意就接着跑并显示进度，也可能随时收回，收回后和暂停一样。这部分只编过、没在设备上跑过。
 - 引擎的堆上限是 `--max-old-space-size=256 --max-semi-space-size=4`，还没在设备上定过。它和 App 同进程，所以快撞上限时 runner 会停掉这次运行（退出码 70），App 留着，可以重新启动。这一轮不会接着跑。Buffer 和原生内存、系统的 jetsam 不在保护范围内。
 - NodeMobile 24.22.1-0 记录 fd 时增删用的哈希不一样，Environment 结束时会按旧号关掉别人的文件和 socket，所以主线程和 Worker 都关了 fd 跟踪。代价：一次运行留下没关的原始 fd，要到 App 退出才释放。
-- 桌宠悬浮窗、后台常驻、应用内 APK 更新在 iOS 上没有，已隐藏。
+- iOS 的 App 外宠物使用系统画中画，默认关闭且不作为手机操控前置条件；伙伴小屋另有小号/中号桌面小组件，展示名字、状态、亲密度和最近一句话，点按进入小屋。小组件使用专用共享 Keychain 展示快照，不共享模型凭据或配对记录；Runner 与 CompanionWidget 的签名必须包含相同的专用 access group。系统安排刷新，不是实时 Live2D 动画。Android 式悬浮窗、无限后台常驻和应用内 APK 更新不适用于 iOS。
 - 手机系统动作（日历、分享、拨号草稿等）给本机引擎提供 13 个 `mcp__phone__*` 工具，和安卓同一份目录。每个动作都要在 App 里批准一次，通知点击不算批准。系统动作本身还没在设备上跑过。
 - Siri 和快捷指令（iOS 16 以上）：问 DSH Go、语音输入、新建对话。都只是打开 App 停在输入框，不会自动发送。CI 只查过元数据，没实际喊过。
 - 内置浏览器：`mcp__browser__*`，App 内一个独立的 WKWebView，脚本跑在单独的 content world 里。每次运行里，每个站点第一次要用户批准。密码和支付字段不让填，弹页面交给用户。不能访问本机和内网地址，但只查写死的 IP，解析到内网的域名拦不住。iOS 17 以上登录状态和 App 其他网页分开存。
 - 系统工具：`mcp__system__*`，读写提醒事项和联系人、选图片、读一次位置、识别图片里的文字。只在用户看着 App 时才跑，每次都弹确认并写明要读写什么。选图片用系统选择器，它本身就算同意；文字识别只能用这个对话选过的图片，图片 30 分钟或本次运行结束后失效。这部分只编过、没在设备上跑过。
-- 控制其他 App：默认仍用 `tooling/ios/phone-runner.sh <设备 ID>` 从 Mac 启动长期运行的 XCTest（`PhoneRunner` target），读取结构化元素并执行操作；需要开发者模式、同 Team/App Group 签名以及常驻的 Mac 脚本。另有[端上 XCTest 实验](../../tooling/ios/phone-self-runner.md)：显式构建可选原生库后，用 RP 配对、本机隧道和已安装 helper 在手机启动同一套元素读屏；新握手不依赖 App Group，但必须预先挂载匹配 DDI，不声称设备重启后也能永远不用 Mac。用户现有一次 30 分钟授权、敏感输入拦截和 handoff 保留，没有增加逐步确认。Mac 路径已有模拟器烟测；新端上路径尚未做 Apple SDK/真机验证，不能上架或当成已可用功能宣传。
+- 控制其他 App：默认使用本机 CoreDevice 开发者连接查询/打开应用和 OCR 读屏，实际输入能力取决于系统服务；XCTest 是单独启用的增强，需匹配并签名安装的 PhoneRunner。本次引擎和对话的手机任务首次由用户原生授权，最长 30 分钟；普通后续动作不再逐次拉回确认，敏感输入交还用户。开启完成后返回时，CoreDevice 与 XCTest 各自复用本任务仍有效的连接打开 DSH Go，不重建连接、不跨路线重试，是否进入前台以 UIKit 为准。Mac runner 仍是可选路径。参见[手机操控](../../docs/guide/zh/04-phone-control.md)和[设备验证记录](../../tooling/ios/phone-self-runner/DEVICE_TEST_PROGRESS.md)；模拟器通过不代表当前组合版本已经完成真机验收。
 - `dsh/native-media` 的语音不提供：回声消除管不到扬声器。`dsh/usage` 只读不上报：Worker 只收安卓的值。`dsh/dynamic_color`、`dsh/picture_shortcut` iOS 没有公开接口，入口隐藏。
 - 设备档位：内存低于 3.5 GiB 算低档，其余中档，不用 `high`。
 - 通知只在应用运行时发得出去。锁屏和离开应用后的提醒要 APNs，还没做，所以离开应用后等你确认的请求不会提醒你，回到应用才看得到。
@@ -148,7 +150,7 @@ python3 tooling/ios/tests/guest-admission.test.py -v
 | 联系人 | 让引擎查一个人的电话、新建一个联系人 | 确认里写明查什么；只返回问到的字段；不动已有联系人；iOS 18 受限授权时只查得到允许的 |
 | 选图片和识别 | 让引擎选一张带中文的图并读文字 | 弹系统选择器；读出中文；换个对话用这张图被拒绝 |
 | 位置 | 让引擎读当前位置，再在设置里改成大致位置 | 确认后弹一次系统权限；大致位置时返回 `reduced` |
-| 控制其他 App | Mac 上跑 `phone-runner.sh`，让引擎打开设置、读屏幕、点一项 | 先弹 30 分钟授权；能看到和操作；密码框被拒绝；Mac 上停掉后工具明确报不可用 |
+| 控制其他 App | 配好本机开发者连接，让引擎打开设置并连续读屏；点按另测 XCTest 增强 | 不选宠物、不开画中画也可发起手机任务；首次任务授权后连续读屏无需回 App 重复确认；任务完成后按设置返回原对话；连接缺输入能力时不伪造点击成功 |
 | 换主题的网页小窗 | 系统和应用的深色设置不一致时打开插件小窗 | 跟随应用的深色，文字缩放跟随 |
 | 深色模式 | 系统切深色后启动 | 启动屏不闪白 |
 | 中文 | 系统语言切中文和英文 | 权限说明和快捷操作跟随系统语言 |

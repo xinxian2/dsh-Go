@@ -8,8 +8,9 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+
+import 'companion_context.dart';
 
 const companionLightEndpoint = 'https://api.deepseek.com/anthropic/v1/messages';
 
@@ -17,18 +18,21 @@ const companionLightEndpoint = 'https://api.deepseek.com/anthropic/v1/messages';
 /// line comes back as quickly as she would say it.
 const companionLightModel = 'deepseek-flash';
 
-/// One line of the light conversation, as the model sees it.
-@immutable
+/// One verbatim transcript line. Request-only context is assembled separately.
 class CompanionLine {
-  const CompanionLine.user(this.text) : fromHer = false;
-  const CompanionLine.her(this.text) : fromHer = true;
+  const CompanionLine.user(this.text, {this.legacyText}) : fromHer = false;
+  const CompanionLine.her(this.text) : fromHer = true, legacyText = null;
 
-  static CompanionLine? fromJson(Object? json) {
+  static CompanionLine? fromJson(Object? json, {int version = 2}) {
     if (json is! Map) return null;
     final text = json['text'];
     if (text is! String || text.isEmpty) return null;
+    final migrated = companionMigrateLegacyLine(text, version: version, user: json['role'] == 'user');
     return switch (json['role']) {
-      'user' => CompanionLine.user(text),
+      'user' => CompanionLine.user(
+        migrated.text,
+        legacyText: migrated.legacyText ?? (json['legacyText'] is String ? json['legacyText'] as String : null),
+      ),
       'assistant' => CompanionLine.her(text),
       _ => null,
     };
@@ -37,9 +41,12 @@ class CompanionLine {
   final bool fromHer;
   final String text;
 
+  /// Lossless backup for a narrowly recognized v1 generated prefix.
+  final String? legacyText;
+
   String get role => fromHer ? 'assistant' : 'user';
 
-  Map<String, Object?> toJson() => {'role': role, 'text': text};
+  Map<String, Object?> toJson() => {'role': role, 'text': text, if (legacyText != null) 'legacyText': legacyText};
 }
 
 enum CompanionLightFailure { noKey, badKey, busy, network, server }
@@ -56,12 +63,18 @@ class CompanionLightError implements Exception {
 
 /// Her reply to [lines], as text deltas. Cancelling the subscription drops the
 /// request; [client] is the caller's to close.
+///
+/// [onUsage] hears the tokens the API reported for a reply that finished
+/// (input with its cached part, and output), once; a reply that reported none,
+/// or didn't finish, says nothing.
 Stream<String> streamCompanionReply({
   required http.Client client,
   required String apiKey,
   required String system,
   required List<CompanionLine> lines,
+  CompanionTurnContext? context,
   int maxTokens = 800,
+  void Function(int input, int output)? onUsage,
 }) async* {
   final request = http.Request('POST', Uri.parse(companionLightEndpoint))
     ..headers.addAll({
@@ -76,9 +89,9 @@ Stream<String> streamCompanionReply({
       'max_tokens': maxTokens,
       'thinking': {'type': 'disabled'},
       'system': system,
-      'messages': [
-        for (final line in lines) {'role': line.role, 'content': line.text},
-      ],
+      'messages': companionRequestMessages([
+        for (final line in lines) (role: line.role, text: line.text),
+      ], context: context),
     });
   final http.StreamedResponse response;
   try {
@@ -101,6 +114,20 @@ Stream<String> streamCompanionReply({
       .transform(const LineSplitter())
       // A reply that stops arriving is a failed one, not a slow one.
       .timeout(const Duration(seconds: 45));
+  // message_start carries the input, message_delta the output so far; each
+  // is a running total, not an increment, so the largest one seen stands.
+  int? input;
+  int? output;
+  void usageFrom(Object? usage) {
+    if (usage is! Map) return;
+    int? n(Object? v) => v is int && v >= 0 ? v : null;
+    if (n(usage['input_tokens']) case final fresh?) {
+      final all = fresh + (n(usage['cache_read_input_tokens']) ?? 0) + (n(usage['cache_creation_input_tokens']) ?? 0);
+      input = max(input ?? 0, all);
+    }
+    if (n(usage['output_tokens']) case final out?) output = max(output ?? 0, out);
+  }
+
   try {
     await for (final line in events) {
       if (!line.startsWith('data:')) continue;
@@ -130,7 +157,13 @@ Stream<String> streamCompanionReply({
           if (delta is Map && delta['type'] == 'text_delta' && delta['text'] is String) {
             yield delta['text'] as String;
           }
+        case 'message_start':
+          final message = event['message'];
+          if (message is Map) usageFrom(message['usage']);
+        case 'message_delta':
+          usageFrom(event['usage']);
         case 'message_stop':
+          if (input != null || output != null) onUsage?.call(input ?? 0, output ?? 0);
           return;
       }
     }
@@ -211,7 +244,10 @@ class CompanionLightHistory {
       try {
         final json = jsonDecode(await file.readAsString());
         if (epoch == _epoch && json is Map && json['lines'] is List) {
-          _lines.insertAll(0, [for (final line in json['lines'] as List) ?CompanionLine.fromJson(line)]);
+          final version = json['v'] == 1 ? 1 : 2;
+          _lines.insertAll(0, [
+            for (final line in json['lines'] as List) ?CompanionLine.fromJson(line, version: version),
+          ]);
           if (_lines.length > keep) _lines.removeRange(0, _lines.length - keep);
         }
       } on Object {
@@ -220,6 +256,8 @@ class CompanionLightHistory {
     });
   }
 
+  /// The caller must pass only the human's text; use streamCompanionReply's
+  /// context argument for events. Integrate the page change with this schema.
   void add(CompanionLine line) {
     _lines.add(line);
     if (_lines.length > keep) _lines.removeRange(0, _lines.length - keep);
@@ -251,7 +289,7 @@ class CompanionLightHistory {
   /// write's turn comes).
   Future<void> save() {
     final json = jsonEncode({
-      'v': 1,
+      'v': 2,
       'lines': [for (final line in _lines) line.toJson()],
     });
     return _queued(() async {

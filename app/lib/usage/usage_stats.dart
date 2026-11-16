@@ -1,5 +1,5 @@
 // 发送匿名使用统计: anonymous, per-day counts kept on the phone and sent once
-// each, the day after (contract v1, usage_ledger.dart). On by default, but
+// each, the day after (contracts v1–v3, usage_ledger.dart). On by default, but
 // nothing is counted until the person has seen the switch (first run's
 // 「想让 DSH Go 帮你做哪些事」, or 设置 › 隐私与分享). Off means nothing is
 // counted, nothing is kept and no request is made.
@@ -47,11 +47,15 @@ final usageClockProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 final usageHttpProvider = Provider<UsageHttp>((ref) => const IoUsageHttp());
 final usageEndpointProvider = Provider<Uri>((ref) => usageEndpoint);
 final usageDeviceProvider = Provider<Future<UsageDevice> Function()>((ref) => const UsageDeviceChannel().read);
-final usageLanguageProvider = Provider<String Function()>((ref) => () => AppLocale.current.languageCode);
+final usageLanguageProvider = Provider<String Function()>(
+  (ref) =>
+      () => AppLocale.current.languageCode,
+);
 
 /// Calls back each time the app comes to the front; returns how to stop.
 final usageResumesProvider = Provider<VoidCallback Function(VoidCallback onResume)>(
-  (ref) => (onResume) => AppLifecycleListener(onResume: onResume).dispose,
+  (ref) =>
+      (onResume) => AppLifecycleListener(onResume: onResume).dispose,
 );
 
 /// A phone control task began between [before] and [now]: a new number, or
@@ -60,7 +64,8 @@ bool phoneTaskStarted(PhoneTaskStatus before, PhoneTaskStatus now) =>
     now.active && (!before.active || (now.id != null && now.id != before.id));
 
 /// The on-device engine's launch while it runs (`direct`, `proot`).
-String? _engineMode(LocalRuntimeState s) => s.status.phase == RuntimePhase.running ? s.status.currentExecutionMode : null;
+String? _engineMode(LocalRuntimeState s) =>
+    s.status.phase == RuntimePhase.running ? s.status.currentExecutionMode : null;
 
 class UsageStatsController extends Notifier<UsageStatsState> {
   static const enabledKey = 'usage_stats_enabled';
@@ -79,6 +84,10 @@ class UsageStatsController extends Notifier<UsageStatsState> {
   String? _iid;
   DateTime? _iidSince;
   DateTime? _failedAt;
+
+  /// The newest contract the share host takes: one lower each time it
+  /// refused a body (400), until the app starts again.
+  int _contract = usageContract;
 
   /// The local day the share host said it collects nothing (404).
   String? _closedDay;
@@ -157,6 +166,10 @@ class UsageStatsController extends Notifier<UsageStatsState> {
   /// One more [c] today.
   void count(UsageCount c) => _record((ledger, now) => ledger.count(c, now));
 
+  /// A model reply reported its tokens: [input] (cached input included) and
+  /// [output]. Only what the provider said; nothing is estimated.
+  void tokens(int input, int output) => _record((ledger, now) => ledger.tokens(input, output, now));
+
   /// The host's plugin list was read: [installed] plugins on it.
   void plugins(int installed) => _record((ledger, now) => ledger.plugins(installed, now));
 
@@ -225,7 +238,11 @@ class UsageStatsController extends Notifier<UsageStatsState> {
   Future<void> send() => _sending ??= _send().whenComplete(() => _sending = null);
 
   Future<void> _send() async {
-    if (!UsageBuild.active || !ref.mounted || !state.collecting) return;
+    // A run belongs to the ledger it started with: turning off replaces it,
+    // so off and on again while a request waits leaves the run nothing to do.
+    final ledger = _ledger;
+    bool live() => ref.mounted && state.collecting && identical(_ledger, ledger);
+    if (!UsageBuild.active || !live()) return;
     final now = _now();
     if (_failedAt case final at? when !now.isBefore(at) && now.difference(at) < retryGap) return;
     if (_closedDay == usageDay(now)) return;
@@ -237,7 +254,7 @@ class UsageStatsController extends Notifier<UsageStatsState> {
       return;
     }
     final device = _device ??= await ref.read(usageDeviceProvider)();
-    if (!ref.mounted || !state.collecting) return;
+    if (!live()) return;
     final iid = _currentIid(now);
     final http = ref.read(usageHttpProvider);
     final endpoint = ref.read(usageEndpointProvider);
@@ -245,7 +262,9 @@ class UsageStatsController extends Notifier<UsageStatsState> {
     for (final day in due) {
       final record = _ledger.days[day];
       if (record == null) continue;
-      final payload = usagePayload(iid: iid, day: day, record: record, device: device, lang: lang);
+      Map<String, Object> body() =>
+          usagePayload(iid: iid, day: day, record: record, device: device, lang: lang, version: _contract);
+      var payload = body();
       // The host would refuse it (400): not worth a request.
       if (usageProblem(payload, now) != null) {
         _ledger.drop(day);
@@ -254,11 +273,21 @@ class UsageStatsController extends Notifier<UsageStatsState> {
       int? status;
       try {
         status = await http.post(endpoint, jsonEncode(payload), timeout: timeout);
+        // A host from before v3 refuses its counts, one from before v2 the
+        // model and system: the same day again one contract lower, and that
+        // one for the rest of this run of the app.
+        while (status == 400 && (payload['v']! as int) > 1 && live()) {
+          _contract = (payload['v']! as int) - 1;
+          payload = body();
+          // No answer to the lower one is a failed send, not the earlier 400.
+          status = null;
+          status = await http.post(endpoint, jsonEncode(payload), timeout: timeout);
+        }
       } catch (_) {
         // Quietly: tried again the next time the app comes to the front.
       }
       // Turned off meanwhile: everything is gone already.
-      if (!ref.mounted || !state.collecting) return;
+      if (!live()) return;
       switch (UsageReply.of(status)) {
         case UsageReply.sent:
           _ledger.sent(day);

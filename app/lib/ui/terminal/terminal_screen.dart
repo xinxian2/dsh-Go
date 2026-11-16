@@ -12,6 +12,7 @@ import 'package:xterm/xterm.dart';
 import '../../l10n/l10n.dart';
 import '../../state/terminal_state.dart';
 import '../common/empty_view.dart';
+import '../common/field_paste.dart';
 import '../theme/app_icons.dart';
 import '../theme/theme.dart';
 import 'terminal_keyboard.dart';
@@ -99,7 +100,7 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => TerminalScreenState();
 }
 
-class TerminalScreenState extends ConsumerState<TerminalScreen> {
+class TerminalScreenState extends ConsumerState<TerminalScreen> with FieldPaste<TerminalScreen> {
   final _selection = TerminalController();
   var _scroll = ScrollController();
   final _stack = GlobalKey();
@@ -122,6 +123,8 @@ class TerminalScreenState extends ConsumerState<TerminalScreen> {
     // Anchors belong to the old screen buffer.
     if (oldWidget.tab.terminal != widget.tab.terminal || oldWidget.tab.id != widget.tab.id) {
       _selection.clearSelection();
+      // A paste still waiting on the system was for that terminal.
+      cancelPaste();
     }
     if (oldWidget.tab.id != widget.tab.id) {
       // Each tab gets its own view (and scroll position); the old controller
@@ -231,11 +234,16 @@ class TerminalScreenState extends ConsumerState<TerminalScreen> {
   }
 
   Future<void> _paste() async {
+    final terminal = _terminal;
     _selection.clearSelection();
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text;
-    if (text == null || text.isEmpty || !mounted || !_canType) return;
-    _terminal.paste(text);
+    final text = await readClipboard();
+    if (text == null || text.isEmpty || !mounted) return;
+    // A reconnect can replace the attachment before this widget rebuilds.
+    final current = ref.read(terminalWorkspaceProvider(widget.sessionId)).selected;
+    if (current == null || current.terminal != terminal || current.phase != TerminalPhase.live || !current.writable) {
+      return;
+    }
+    terminal.paste(text);
     _toBottom();
   }
 
@@ -274,7 +282,7 @@ class TerminalScreenState extends ConsumerState<TerminalScreen> {
       TerminalPhase.starting => TerminalStatusBar(label: appL10n.botsTerminalStarting, busy: true),
       TerminalPhase.connecting => TerminalStatusBar(label: appL10n.botsTerminalConnecting, busy: true),
       TerminalPhase.disconnected => TerminalStatusBar(
-        label: appL10n.botsTerminalDisconnected,
+        label: tab.message ?? appL10n.botsTerminalDisconnected,
         actionLabel: appL10n.botsTerminalReconnect,
         onAction: () => _workspace.reconnect(tab.id),
       ),

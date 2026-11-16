@@ -1,4 +1,6 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 
 import 'dart:async';
 
@@ -8,20 +10,21 @@ import 'package:flutter/material.dart';
 import '../../../l10n/l10n.dart';
 import '../../common/expand_reveal.dart';
 import '../../common/fluid_bits.dart';
-import '../../common/overscroll_forwarder.dart';
 import '../../common/smooth_size.dart';
 import '../../common/tool_glyph.dart';
+import '../../fx/orbs/thinking_orb.dart';
 import '../../plugins/view/plugin_view.dart' show DshUiParsed, PluginToolCard;
 import '../../theme/app_icons.dart';
 import '../../theme/theme.dart';
-import '../render/ansi_text.dart';
 import '../render/code_block.dart';
 import '../render/diff_view.dart';
+import '../render/long_text.dart';
 import '../media/media_card.dart';
 import '../tool_view.dart';
 import '../turn_summary.dart';
 import 'approval_card.dart';
 import 'change_card.dart' show DiffCounts;
+import 'question_reply_card.dart';
 import 'stream_motion.dart';
 import 'stream_row.dart';
 import 'tool_images.dart';
@@ -107,6 +110,7 @@ class _ToolRowState extends State<ToolRow> {
     final v = view;
     // 一轮折叠后:只露卡片本身,工具行收在过程里。
     if (widget.card == ToolCardPlacement.cardOnly) {
+      if (v.questionReplies.isNotEmpty) return QuestionReplyCard(replies: v.questionReplies);
       if (v.media case final media?) {
         return Padding(
           padding: const EdgeInsets.symmetric(vertical: 4),
@@ -160,6 +164,8 @@ class _ToolRowState extends State<ToolRow> {
             },
           ),
         ),
+        if (widget.card == ToolCardPlacement.inline && v.questionReplies.isNotEmpty)
+          QuestionReplyCard(replies: v.questionReplies),
         if (pending != null)
           Padding(
             padding: const EdgeInsets.only(top: 4, bottom: 4),
@@ -205,7 +211,7 @@ class _ToolHeader extends StatelessWidget {
     final dsh = DshColors.of(context);
     final status = view.item.status;
     final blocked = view.sandboxBlocked;
-    final failed = status == ToolStatus.failed && !blocked;
+    final failed = status == ToolStatus.failed && !blocked && (view.phoneResult?.isFault ?? true);
 
     final title = titled ? view.pluginTitle : null;
     final summary = blocked ? l10n.chatToolNeedsApproval : title ?? view.summary;
@@ -345,6 +351,7 @@ class _FluidTrailState extends State<_FluidTrail> {
 /// 行尾画的是哪一种:只有换了种类才淡入淡出,streaming → running 还是
 /// 同一个小环,不闪。
 String _trailKind(ToolView view, bool autoAllowing) => switch (view.item.status) {
+  _ when view.phoneResult != null => 'phone',
   ToolStatus.streaming || ToolStatus.running => 'spinner',
   ToolStatus.awaitingApproval when autoAllowing => 'spinner',
   ToolStatus.failed when view.sandboxBlocked => 'empty',
@@ -352,7 +359,18 @@ String _trailKind(ToolView view, bool autoAllowing) => switch (view.item.status)
   final status => status.name,
 };
 
-/// 行尾状态:运行中小环 / 失败 ✕ / 已拒绝 / 已取消 / diff 统计。成功默认安静。
+/// 运行中的工具演哪段光球:跑命令是解题,改文件是写作,读和搜是检索,子任务是干活,
+/// 待办是规划,其余(多是 MCP)是连接服务。
+OrbState _orbFor(ToolKind kind) => switch (kind) {
+  ToolKind.command => OrbState.solving,
+  ToolKind.edit => OrbState.composing,
+  ToolKind.read || ToolKind.search || ToolKind.web => OrbState.searching,
+  ToolKind.agent => OrbState.working,
+  ToolKind.todo => OrbState.weaving,
+  ToolKind.other => OrbState.connecting,
+};
+
+/// 行尾状态:运行中小光球 / 失败 ✕ / 已拒绝 / 已取消 / diff 统计。成功默认安静。
 class _StatusTrail extends StatelessWidget {
   const _StatusTrail({super.key, required this.view, this.autoAllowing = false});
 
@@ -365,17 +383,17 @@ class _StatusTrail extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     final theme = Theme.of(context);
-    final colors = theme.colorScheme;
     final dsh = DshColors.of(context);
     final label = theme.textTheme.labelSmall?.copyWith(fontSize: 12);
 
+    if (view.phoneResult case final phone?) {
+      return Text(phone.word, style: label?.copyWith(color: phone.isFault ? dsh.danger : dsh.textTertiary));
+    }
     switch (view.item.status) {
       case ToolStatus.streaming || ToolStatus.running:
       case ToolStatus.awaitingApproval when autoAllowing:
-        return SizedBox.square(
-          dimension: 14,
-          child: CircularProgressIndicator(strokeWidth: 1.8, color: colors.primary),
-        );
+        // 点阵小光球(Libraries.dev 思考光球),按工具在做的事选一段。
+        return ThinkingOrb(state: _orbFor(toolKindOf(view.item)), size: OrbSize.px20, displaySize: 18);
       case ToolStatus.awaitingApproval:
         return Text(l10n.commonWaitingApproval, style: label?.copyWith(color: dsh.warning));
       case ToolStatus.failed:
@@ -425,32 +443,27 @@ class ToolDetail extends StatelessWidget {
       sections.add(body);
     }
 
-    Widget scrollWell(Widget child) => ConstrainedBox(
-      constraints: const BoxConstraints(maxHeight: _kDetailMaxHeight),
-      child: OverscrollForwarder(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-          child: SizedBox(width: double.infinity, child: child),
-        ),
-      ),
-    );
+    // 限高滚动的文本井;太长的只排头尾,井底给「查看全部」。
+    Widget textWell(String title, String text, {bool ansi = false, TextStyle? style, InlineSpan? prompt}) =>
+        LongTextWell(
+          title: title,
+          text: text,
+          style: style ?? monoStyle,
+          maxHeight: _kDetailMaxHeight,
+          ansi: ansi,
+          prompt: prompt,
+        );
 
     // —— 参数 ——
     if (view.command case final command?) {
       section(
         l10n.chatCommand,
-        scrollWell(
-          SelectableText.rich(
-            TextSpan(
-              children: [
-                TextSpan(
-                  text: r'$ ',
-                  style: monoStyle.copyWith(color: dsh.lineNumberFg),
-                ),
-                TextSpan(text: command),
-              ],
-            ),
-            style: monoStyle,
+        textWell(
+          l10n.chatCommand,
+          command,
+          prompt: TextSpan(
+            text: r'$ ',
+            style: monoStyle.copyWith(color: dsh.lineNumberFg),
           ),
         ),
       );
@@ -482,7 +495,7 @@ class ToolDetail extends StatelessWidget {
         ),
       );
     } else if (item.arguments.trim().isNotEmpty && item.arguments.trim() != '{}') {
-      section(l10n.chatParameters, scrollWell(SelectableText(view.prettyArguments, style: monoStyle)));
+      section(l10n.chatParameters, textWell(l10n.chatParameters, view.prettyArguments));
     }
 
     // —— 结果 ——
@@ -490,15 +503,21 @@ class ToolDetail extends StatelessWidget {
     final resultTitle = view.isTerminal ? l10n.chatOutput : l10n.chatResult;
     if (view.sandboxBlocked) {
       // 被沙箱拦下的第一次尝试:行首的锁已经说明了,不另起一段。
+    } else if (view.phoneResult case final phone?) {
+      section(
+        resultTitle,
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+          child: Text(
+            phone.sentence,
+            style: theme.textTheme.bodySmall?.copyWith(color: phone.isFault ? dsh.danger : dsh.textTertiary),
+          ),
+        ),
+      );
     } else if (view.failureText case final failure?) {
       section(
         l10n.chatError,
-        scrollWell(
-          AnsiText(
-            text: failure,
-            style: monoStyle.copyWith(color: dsh.danger),
-          ),
-        ),
+        textWell(l10n.chatError, failure, ansi: true, style: monoStyle.copyWith(color: dsh.danger)),
       );
     } else if (item.status == ToolStatus.succeeded) {
       if (view.diff case final lines? when lines.isNotEmpty) {
@@ -550,14 +569,11 @@ class ToolDetail extends StatelessWidget {
                       ),
                     )
               : images == null
-              ? scrollWell(AnsiText(text: text, style: monoStyle))
+              ? textWell(resultTitle, text, ansi: true)
               : Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   mainAxisSize: MainAxisSize.min,
-                  children: [
-                    scrollWell(AnsiText(text: text, style: monoStyle)),
-                    images,
-                  ],
+                  children: [textWell(resultTitle, text, ansi: true), images],
                 ),
         );
       }

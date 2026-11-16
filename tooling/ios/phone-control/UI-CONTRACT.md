@@ -245,9 +245,10 @@ PiP、音频所有权及 protected-data 状态。启用和 alwaysShow 各需用�
    不能证明前台 App 或真实焦点。尤其必须实测“同一目标界面 + 动画 PiP → 再次
    输入”：若服务截图包含 PiP，宠物动画仍可能使旧图失效。当前没有设备证据确定
    是否包含，不能据此删掉校验或声称闭环已可用。
-4. 按 ADDENDUM-02，原中文 open 和自动回会话函数保持原字节。纯 CoreDevice 的
-   `lastEndpoint` 为空，现有 XCTest 自动回会话函数不能自动把它带回 DSH；这是
-   交主线处理的已知路线差异，不冒称两路线自动返回都已完成。
+4. 完成后返回按最后实际使用的路线执行。CoreDevice 只复用同任务、同 native
+   generation 的现有连接，固定启动主 App；XCTest 保留既有返回 RPC。不为返回
+   准备新连接，不跨路线兜底，不重复输入。launch ACK 不等于前台成功，桥接层
+   仍等待并核对 UIKit 前台状态。两路线的实际返回均需按组合版本进行真机验收。
 5. 需要真实 iPhone 验证配对两种存储模式、撤销/锁屏、已有 foreign DDI/media
    不抢占、portrait HID/方向变化、剪贴板多表示/权限提示/后来复制/进程终止、
    XCTest App 切换/控制 App 拒绝/过期请求，以及暂停、PiP 关闭与迟到 callback。

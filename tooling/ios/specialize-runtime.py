@@ -13,11 +13,12 @@ import tarfile
 
 HELPER = 'runtime/ohos/process/build/just-bash/chunks/chunk-GN6CQ3J4.js'
 PROVENANCE = 'runtime/ohos/process/build/just-bash/PROVENANCE.json'
-PIN = 'b87766dab2a645753e635c4e0d728443c601b737fb7feb034244d2fa242185ec'
-BEFORE = 'let e=y.encode(t),o="";for(let r=0;r<e.length;r++)o+=String.fromCharCode(e[r]);return o'
-# Keep TextEncoder (including surrogate replacement), x/f validation and the
-# output bytes unchanged; only bound per-byte cons-string amplification.
-AFTER = 'let e=y.encode(t),o=[];for(let r=0;r<e.length;r+=8192)o.push(String.fromCharCode(...e.subarray(r,r+8192)));return o.join("")'
+PIN = '7703634b9ac323b0de2361790c055b9ec032ee1f71dd64a5248b549c39c35a9e'
+# The shared rewrite (runtime/ohos/process/bash-src/rewrite.py) already encodes
+# UTF-8 output through Buffer's latin1 view, which bounds the per-byte cons-string
+# amplification iOS used to patch here. iOS takes the module as it is, and refuses
+# a build that has lost that bound.
+BOUNDED = 'return ohosBuffer.from(t,"utf8").toString("latin1")'
 
 # The shared composition refuses every image, for want of a decoder on HarmonyOS. iOS has one,
 # so the attachment store loads runtime/ios/image/ios-sharp.cjs in place of sharp. ImageIO can't
@@ -130,7 +131,7 @@ DIAGNOSTIC_EDITS = {
     ),
     'runtime/ohos/process/node-script.mjs': (
         ("import { Worker } from 'node:worker_threads';", "import { Worker } from 'node:worker_threads';\nimport { workerEnvironment } from '../../ios/process/worker-env.mjs';"),
-        ("    argv: args.slice(1), env, stdout: true, stderr: true,", "    argv: args.slice(1), env: workerEnvironment(env), stdout: true, stderr: true,"),
+        ("    argv, env, stdin: streamStdin, stdout: true, stderr: true,", "    argv, env: workerEnvironment(env), stdin: streamStdin, stdout: true, stderr: true,"),
         ('Node scripts require the inherited OHOS product preload', 'Node scripts require the inherited iOS product preload'),
     ),
     'runtime/ohos/net/bootstrap.mjs': (
@@ -150,15 +151,14 @@ DIAGNOSTIC_EDITS = {
     ),
 }
 ATTACHMENT_EDITS = (
-    ('* Establish this process\'s proof that one DSH_HOME entry and every ancestor\n* below the filesystem root are durable.',
-     '* Sync the native iOS default DSH_HOME entry within its host-owned HOME.\n* Custom store homes retain the original filesystem-root durability walk.'),
-    # The native iOS host owns HOME and validates DSH_HOME = HOME/.dsh, with no
-    # redirected layout directories. Sync the .dsh entry in that existing home,
-    # not container ancestors that iOS does not permit us to open.
-    ('\t\tawait ensureDurableDirectory(home, parse(home).root);',
+    ('* Establish this process\'s proof that one DSH_HOME entry and every ancestor\n* below the filesystem root (or installed Direct root) are durable.',
+     '* Sync the native iOS default DSH_HOME entry within its host-owned HOME.\n* Custom store homes retain the original Direct/filesystem-root boundary.'),
+    # The native host owns HOME and validates the default DSH_HOME = HOME/.dsh.
+    # Keep main's Direct-root boundary for any custom home instead of syncing
+    # container ancestors that the iOS app is not permitted to open.
+    ('\t\tconst boundary = typeof directRoot === "string" && (home === directRoot || home.startsWith(directRoot + "/")) ? directRoot : parse(home).root;',
      '\t\tconst hostHome = process.env.HOME;\n'
-     '\t\tconst boundary = hostHome && resolve(hostHome) === hostHome && home === join(hostHome, ".dsh") && home === resolveDshHome() ? hostHome : parse(home).root;\n'
-     '\t\tawait ensureDurableDirectory(home, boundary);'),
+     '\t\tconst boundary = hostHome && resolve(hostHome) === hostHome && home === join(hostHome, ".dsh") && home === resolveDshHome() ? hostHome : typeof directRoot === "string" && (home === directRoot || home.startsWith(directRoot + "/")) ? directRoot : parse(home).root;'),
     ('const loadSharp = createLazyRequire("sharp", import.meta.url);',
      'const loadSharp = createLazyRequire("./ios-sharp.cjs", import.meta.url);'),
     ('\tif (process.platform === "openharmony") throw new AttachmentError("鸿蒙本机尚无可用的图像解码/重编码库；请连接电脑处理图像。普通文件仍可上传或保存。", "OHOS_IMAGE_CODEC_UNAVAILABLE");\n',
@@ -295,7 +295,7 @@ def specialize(expanded, out, composer, npm):
     if out.exists() or out.is_symlink():
         raise ValueError('iOS output already exists; preserved')
     original = (expanded / 'files' / HELPER).read_bytes()
-    if hashlib.sha256(original).hexdigest() != PIN or original.decode().count(BEFORE) != 1:
+    if hashlib.sha256(original).hexdigest() != PIN or original.decode().count(BOUNDED) != 1:
         raise ValueError('iOS byte encoder differs from pinned just-bash 3.6.0 input')
     manifest = json.loads((expanded / 'manifest.json').read_bytes())
     entries = {row['path']: row for row in manifest['files']}
@@ -355,10 +355,9 @@ def specialize(expanded, out, composer, npm):
     module = 'chunks/chunk-GN6CQ3J4.js'
     if provenance['upstream']['version'] != '3.6.0' or provenance['modules'][module] != PIN:
         raise ValueError('Unexpected just-bash provenance')
-    changed = original.decode().replace(BEFORE, AFTER).encode()
-    provenance['modules'][module] = composer.digest(changed)
+    changed = original
     provenance['iosSpecialization'] = {
-        'reason': 'Bound UTF-8 byte-string concatenation overhead with 8192-byte chunks',
+        'reason': 'None: the shared just-bash build already bounds UTF-8 byte-string output',
         'beforeSha256': PIN, 'afterSha256': composer.digest(changed),
         'generatorSha256': composer.digest(Path(__file__).read_bytes()),
     }

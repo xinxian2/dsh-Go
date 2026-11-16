@@ -4,14 +4,14 @@
 
 ## 行为与边界
 
-- 默认关闭。首次开启只能在前台通过原生说明框明确选择；“始终显示”是另一次选择。两个设置独立持久化。
+- 默认关闭，升级首次也会关闭旧版必需小窗的设置；之后保留用户显式选择。首次开启只能在前台通过原生说明框明确选择；“始终显示”是另一次选择。两个设置独立持久化。手机操控使用系统持续任务，不再要求 PiP 或已选宠物。
 - 默认只在已认证的手机操控任务期间准备可见视频源。结束最后这个任务立即请求关闭 PiP、停止绘制，并释放自己仍持有的音频配置。没有沿用 Android 的五分钟延迟。用户另行选择 `alwaysShow` 后保留显示需求；已有后台 PiP 可以继续，但仍以 AVKit 的实际 active/suspended 状态为准。无任务时从前台准备或新启动还需要真正可见的嵌入宿主，不保证始终能显示。
 - Dart 的 `PetState` 继续是唯一的状态归约结果。原生只读取 `state/tier/packId/size/quiet/reduceMotion/bubble.text/target` 等既有字段，按真实 `pack.json`、PNG 格子与逐帧毫秒呈现。不从 phone 请求推导新 mood，不展示 `ask`、`detail` 或会话正文，不在 PiP 内批准任何操作。
-- 仅手机任务存在时，才允许临时的真正可见、非交互 160×106 pt 原生预览，位于 safe area 右上、顶栏下方。结束任务后，即使 `alwaysShow=true`，它也不再覆盖前台 Flutter 页面。Auto Layout 随旋转重排。主线仍可通过 `attachSource(to:)` 把同一个源放入状态卡，嵌入宿主优先，不受“临时预览仅任务期间”的限制。无任务又无可见宿主时，不准备 inline PiP，手动启动返回 false；`sourceVisible=false`，前台有显示需求时派生 `errorCode=overlay_source_missing`。此状态不写入 `lastError`，也不把配置层 `usable` 永久锁住；后续 phone 任务仍必须满足真实 `keepingAlive` 准入。隐藏、屏幕外或尺寸不足的宿主同样不能当作准备/启动成功。这个过渡位置和状态卡仍需在具体页面/横屏上检查；不能把没有做过的界面检查写成通过。
+- 仅手机任务存在时，才允许临时的真正可见、非交互 160×106 pt 原生预览，位于 safe area 右上、顶栏下方。结束任务后，即使 `alwaysShow=true`，它也不再覆盖前台 Flutter 页面。Auto Layout 随旋转重排。主线仍可通过 `attachSource(to:)` 把同一个源放入状态卡，嵌入宿主优先，不受“临时预览仅任务期间”的限制。无任务又无可见宿主时，不准备 inline PiP，手动启动返回 false；`sourceVisible=false`，前台有显示需求时派生 `errorCode=overlay_source_missing`。此状态不写入 `lastError`，也不把配置层 `usable` 永久锁住；`keepingAlive` 仅报告可选小窗的实际后台执行状态，不是 phone 准入条件。隐藏、屏幕外或尺寸不足的宿主同样不能当作准备/启动成功。这个过渡位置和状态卡仍需在具体页面/横屏上检查；不能把没有做过的界面检查写成通过。
 - 使用标准系统 PiP 控件。点击画面通常先显示系统控件；**通过系统“还原到 App”按钮回到 App**，不承诺任意点击画面直接跳回。没有私有 `controlsStyle`，没有画上去却不能点击的“停止”按钮。
 - 系统播放/暂停键先请求暂停该 task id 的手机准入；不会取消任务所有权，也不会自行批准、停止或恢复。返回 App 后，原生框提供“保持暂停 / 继续 / 停止任务”。只有真正在前台选“继续/停止”，且当前对话框身份及 task id 都仍匹配，才调用相应 owner 回调；被撤销或替换的旧框不能对同一任务补发确认。
 - 每次新的暂停只请求一次导航到所属对话；导航在发送前消费，选择“保持暂停”后反复回前台仍可提示确认，但不会再次跳转。系统“还原到 App”和前台 `reviewPausedTask` 是新的显式导航意图，可以各自再请求一次。继续、结束或更换任务会清理旧意图；导航本身不会清除暂停或替代动作批准。
-- 系统关闭 PiP 会 snooze 并暂停当前手机任务，不能由后续 `push` 自动重开。录音/独占媒体会话接管、音频中断、锁屏、PiP 失败或不可用都不能继续报告 `keepingAlive=true`。后台 phone 准入仍必须由 phone owner 检查 `isKeepingAlive`，不能用 `enabled`、`usable` 或声明了后台模式代替。
+- 系统关闭 PiP 会 snooze，不能由后续 `push` 自动重开；小窗失败、被系统关闭或失去音频不会自动暂停手机任务。显式播放/暂停控件和设备锁定仍会暂停手机任务。录音/独占媒体会话接管、音频中断、锁屏、PiP 失败或不可用都不能继续报告 `keepingAlive=true`。引擎只在系统实际接受持续任务或可选 PiP 实际运行时报告后台执行许可，不以开关代替。
 
 ## 与 phone owner 的 Swift surface
 
@@ -33,7 +33,7 @@ overlay.endPhoneTask(id: taskID)
 | Surface | 含义 |
 |---|---|
 | `isUsable` | 用户已启用、设备支持、选择的宠物包有效、未 snooze/失败；是配置与素材就绪状态 |
-| `isKeepingAlive` | 上述要求、实际 PiP active 且未 suspended、仍持有匹配音频配置、protected data 可用、当前仍有显示需求；是准入所需的实时观察，不是保证未来一直运行 |
+| `isKeepingAlive` | 上述要求、实际 PiP active 且未 suspended、仍持有匹配音频配置、protected data 可用、当前仍有显示需求；是可选后台执行源的实时观察，不是手机操控准入条件或未来持续运行保证 |
 | `statusSnapshot` | 下表同一份状态 |
 | `sourceView` / `attachSource(to:)` | 将真正可见的同一 `AVSampleBufferDisplayLayer` 源嵌入主线卡片；不要缩成 1 px、隐藏、透明或放到屏幕外 |
 

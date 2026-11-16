@@ -24,8 +24,12 @@ class UnknownResultsBanner extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // A turn can end with a call unaccounted for, with no reconnection to prompt a read.
-    ref.listen(chatProvider(sessionId).select((chat) => chat.running), (was, now) {
-      if (was == true && !now) ref.invalidate(unknownResultsProvider(sessionId));
+    ref.listen(chatProvider(sessionId).select((chat) => (running: chat.running, error: chat.error)), (was, now) {
+      // A lifecycle gate may reject a prompt before running ever becomes true.
+      // Refresh the recovery entry on that error as well as on turn completion.
+      if ((was?.running == true && !now.running) || (now.error != null && was?.error != now.error)) {
+        ref.invalidate(unknownResultsProvider(sessionId));
+      }
     });
     final state = ref.watch(unknownResultsProvider(sessionId)).value;
     if (state == null || (!state.pending && !state.blocked)) return const SizedBox.shrink();

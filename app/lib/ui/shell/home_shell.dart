@@ -1,4 +1,6 @@
-// Portions derived from PiPilot (https://github.com/CikeSeven/pi_pilot), MIT, Copyright (c) 2026 CikeSeven. See THIRD_PARTY_NOTICES.md.
+// SPDX-FileCopyrightText: 2026 CikeSeven
+// SPDX-License-Identifier: MIT
+// See THIRD_PARTY_NOTICES.md.
 
 import 'dart:async';
 import 'dart:math' as math;
@@ -21,6 +23,7 @@ import '../bots/bot_alerts.dart';
 import '../chat/chat_screen.dart';
 import '../chat/composer_toast.dart' show composerToastGap;
 import '../engine/engine_screen.dart';
+import '../engine/reset_outcome.dart';
 import '../features/all_features_page.dart';
 import '../forum/forum_link_host.dart';
 import '../notify/background_net_host.dart';
@@ -30,6 +33,7 @@ import '../notify/voice_model_host.dart';
 import '../plugins/plugins_screen.dart';
 import '../pets/pet_settings_page.dart';
 import '../phone/phone_stop_watcher.dart';
+import '../phone/system_actions_host.dart';
 import '../remote/host_switcher.dart' show showHostSheet;
 import '../remote/remote_screen.dart';
 import '../safe_mode/safe_mode_notice_listener.dart';
@@ -37,6 +41,7 @@ import '../session/session_detail_page.dart';
 import '../settings/search/settings_search_page.dart';
 import '../settings/settings_screen.dart';
 import '../share_code/share_code_host.dart';
+import '../tavern/tavern_intake.dart';
 import '../star/star_prompt_host.dart';
 import '../theme/theme.dart';
 import '../update/update_launch_check.dart';
@@ -342,8 +347,15 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                       // one line under the header (draws nothing here).
                       if (ref.watch(androidSystemFeaturesProvider))
                         const BackgroundNetHost()
-                      else
+                      else ...[
                         const BackgroundPauseHost(),
+                        if (ref.watch(operatingSystemProvider) == 'ohos') ...[
+                          // 系统操作: its session and a handoff's prompt (draws nothing here).
+                          const SystemActionsHost(),
+                          // How a reset asked for before the app reopened came out (draws nothing).
+                          const ResetReceiptHost(),
+                        ],
+                      ],
                       // Daily update check + install resume (draws nothing).
                       const UpdateLaunchCheck(),
                       // The voice model chosen during setup: download, resume, ready / failed notices (draws nothing).
@@ -354,6 +366,8 @@ class _HomeShellState extends ConsumerState<HomeShell> with TickerProviderStateM
                       const LinkHost(),
                       // Share codes (分享码): registers its links and files with the router.
                       const ShareCodeHost(),
+                      // Character cards opened with the app: into 酒馆.
+                      const TavernIntakeHost(),
                       // Share sheet, launcher shortcuts, the tile: into the chat (draws nothing).
                       SystemEntryHost(onReveal: _revealChat),
                       // Forum links (sign-in return, topics): registers them with the router.

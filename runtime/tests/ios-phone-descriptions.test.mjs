@@ -12,7 +12,8 @@ test('every shared phone schema has explicit iOS instructions', () => {
 test('iOS instructions distinguish OCR, unavailable input and native approvals', () => {
   assert.match(iosToolDescription('screen'), /OCR.*不是可交互元素树/);
   assert.match(iosToolDescription('screen'), /没有 background:true/);
-  assert.match(iosToolDescription('tap'), /每次原生批准/);
+  assert.match(iosToolDescription('tap'), /任务授权/);
+  assert.match(iosToolDescription('screen'), /不再弹窗或拉回 DSH Go/);
   assert.match(iosToolDescription('tap'), /输入不可用.*增强已开启.*新的 XCTest 观察/);
   assert.match(iosToolDescription('tap'), /未开启时才请用户开启/);
   assert.match(iosToolDescription('collect'), /不是纯只读/);

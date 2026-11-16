@@ -2,7 +2,7 @@ import Foundation
 import UIKit
 import UserNotifications
 
-/// Selects the user-enabled route and admits one genuinely confirmed tool call.
+/// Selects the user-enabled route inside an explicitly granted phone task.
 /// The default is the shared CoreDevice owner. XCTest is a separate opt-in;
 /// uncertainty after any dispatch never authorizes switching routes or replay.
 @MainActor
@@ -25,6 +25,7 @@ final class IOSPhoneRunner {
   private struct Owner: Equatable {
     let runID: String
     let sessionID: String
+    let settingsGeneration: UUID
   }
   private var taskOwner: Owner?
   private var lastRoute: Route?
@@ -43,7 +44,7 @@ final class IOSPhoneRunner {
     configuration.connectionProxyDictionary = [:]
     session = URLSession(configuration: configuration)
     consent.onExpiration = { [weak self] runID, sessionID in
-      guard let self, self.taskOwner == Owner(runID: runID, sessionID: sessionID) else { return }
+      guard let self, self.taskOwner?.runID == runID, self.taskOwner?.sessionID == sessionID else { return }
       self.retireConnection(ownerID: self.selfOwnerID)
     }
   }
@@ -59,7 +60,7 @@ final class IOSPhoneRunner {
     retireConnection(ownerID: selfOwnerID)
   }
 
-  /// A declined call closes only this connection and its observations. It does
+  /// An invocation refusal closes only this connection and its observations. It does
   /// not revoke or renew a still-valid task grant. A late refusal has no power
   /// over a newer invocation, even within the same engine/session tuple.
   private func retireConnection(ownerID: String, invocationID: UUID? = nil) {
@@ -79,7 +80,25 @@ final class IOSPhoneRunner {
   /// Only the already-authorized runner may return to this app; never launch a
   /// new runner, repeat an unknown action, or choose another destination here.
   func returnToApp(current: () -> Bool) async -> Bool {
-    guard current(), let endpoint = lastEndpoint,
+    guard let grantedOwner = taskOwner else { return false }
+    func permitted() -> Bool {
+      current() && self.taskOwner == grantedOwner && self.consent.isGranted
+        && IOSPhoneLink.shared.generation == grantedOwner.settingsGeneration
+    }
+    guard permitted() else { return false }
+    if lastRoute == .coredevice {
+      let ownerID = selfOwnerID
+      let owner = taskOwner
+      guard owner != nil, IOSPhoneLink.shared.enabled else { return false }
+      let launched = await core.returnToApp(ownerID: ownerID, current: {
+        permitted() && self.selfOwnerID == ownerID && self.taskOwner == owner
+          && IOSPhoneLink.shared.enabled
+      })
+      guard launched, permitted(), self.selfOwnerID == ownerID, self.taskOwner == owner,
+        let bundle = Bundle.main.bundleIdentifier else { return false }
+      return UIApplication.shared.applicationState == .active || IOSPhoneCoreActions.requestForeground(bundle)
+    }
+    guard permitted(), let endpoint = lastEndpoint,
       endpoint.runId == nil || selfRunner.owns(endpoint),
       let bundle = Bundle.main.bundleIdentifier,
       let url = URL(string: "http://127.0.0.1:\(endpoint.port)/rpc") else { return false }
@@ -92,11 +111,11 @@ final class IOSPhoneRunner {
     http.setValue("Bearer " + endpoint.token, forHTTPHeaderField: "Authorization")
     http.setValue("application/json", forHTTPHeaderField: "Content-Type")
     http.httpBody = try? JSONSerialization.data(withJSONObject: values)
-    guard let (data, response) = try? await session.data(for: http), current(),
+    guard let (data, response) = try? await session.data(for: http), permitted(),
       (response as? HTTPURLResponse)?.statusCode == 200,
       let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       result["ok"] as? Bool == true else { return false }
-    return true
+    return UIApplication.shared.applicationState == .active || IOSPhoneCoreActions.requestForeground(bundle)
   }
 
   func cancelPreparation() {
@@ -112,7 +131,8 @@ final class IOSPhoneRunner {
     // explicit request can ask for a new grant after the old connection closes.
     consent.checkExpiration()
     guard current(), !Task.isCancelled else { return .failure(IOSPhoneSelfRunnerError.cancelled.message) }
-    let incomingOwner = Owner(runID: request.runId, sessionID: request.owner.sessionId)
+    let incomingOwner = Owner(runID: request.runId, sessionID: request.owner.sessionId,
+      settingsGeneration: IOSPhoneLink.shared.generation)
     if taskOwner != incomingOwner {
       // A different conversation cannot inherit either backend's observations,
       // the previous grant, or its native owner, even when the helper endpoint
@@ -146,42 +166,44 @@ final class IOSPhoneRunner {
     guard link.enabled || link.xctestEnabled else {
       return .failure("手机连接和 XCTest 增强均未启用。请由用户在设置中选择；已保存配对不等于授权操控。")
     }
-    guard IOSPetOverlay.shared.isUsable else {
-      return .failure("手机操控需要先启用并选好宠物画中画；配置完成后由用户重新发起。")
-    }
     let plan: IOSPhoneOperation
     do { plan = try IOSPhoneOperation(request) }
     catch { return .failure((error as? IOSPhoneOperationError)?.message ?? "手机动作参数无效。") }
-    if plan.method == .open { targetApplication = nil }
-    if plan.requiresObservation, lastRoute == nil {
+    let method = plan.method
+    let needsTarget = plan.needsTarget
+    let requiresObservation = plan.requiresObservation
+    if method == .open { targetApplication = nil }
+    if requiresObservation, lastRoute == nil {
       return .failure("没有本次任务的有效屏幕观察。先用 screen，不要猜编号或重放旧动作。")
     }
     let explicitApp = (plan.parameters["app"] as? String).flatMap { PhoneRunnerAppCatalog.bundleID(for: $0) }
     let preference = explicitApp.flatMap { link.appRoutes[$0] }
     let mustCore = preference == "coredevice"
     let mustXCTest = preference == "xctest"
-    let chooseXCTest = mustXCTest || ((plan.requiresObservation || plan.method == .screen) && lastRoute == .xctest)
+    let chooseXCTest = mustXCTest || ((requiresObservation || method == .screen) && lastRoute == .xctest)
     guard !chooseXCTest || link.xctestEnabled else { return .failure("XCTest 增强已关闭，没有启动或调用运行器。") }
     guard !mustCore || link.enabled else { return .failure("这个应用固定使用 CoreDevice，但本机连接已关闭。") }
-    let returnTarget = plan.needsTarget && link.xctestEnabled ? targetApplication : nil
+    let returnTarget = needsTarget ? targetApplication : nil
     let returnDescription = returnTarget.map {
-      "\n\n若本次使用 XCTest，允许后会先返回本次任务已打开或观察的应用：\($0)，再重新核对屏幕。若保持 CoreDevice 路线，请自行切回目标界面。不会重复原来的点按或输入。"
+      "\n\n本任务已选择目标应用：\($0)。需要离开 DSH Go 时会请求系统将它置于前台，再重新核对画面；不会重复已经派发的动作。"
     } ?? ""
     let description = plan.consentDescription(targetLabel: coreActions.targetLabel(plan, ownerID: ownerID,
       sessionID: request.owner.sessionId))
       + "\n\n路线由你的设置和可用性决定；XCTest 只在已启用时使用。已经派发或结果不明时不切换重试。"
       + returnDescription
-    guard await consent.prepareForeground(request, current: live), live(),
-      await IOSPhoneClipboard.shared.resolvePending(request, actions: actions, current: live), live() else {
-      retireConnection(ownerID: ownerID, invocationID: invocationID)
-      return .failure("请先回到 DSH Go 处理上次剪贴板恢复；没有执行新动作。")
+    if IOSPhoneClipboard.shared.hasPendingRestore {
+      guard await consent.prepareForeground(request, current: live), live(),
+        await IOSPhoneClipboard.shared.resolvePending(request, actions: actions, current: live), live() else {
+        retireConnection(ownerID: ownerID, invocationID: invocationID)
+        return .failure("请先回到 DSH Go 处理上次剪贴板恢复；没有执行新动作。")
+      }
     }
     let preview = coreActions.approvalPreview(plan, ownerID: ownerID, sessionID: request.owner.sessionId)
     guard await consent.approve(request, detail: description,
-      needsTarget: returnTarget == nil && (plan.needsTarget || plan.method == .open), preview: preview, current: live),
+      needsTarget: returnTarget == nil && (needsTarget || method == .open), preview: preview, current: live),
       live(), await authorize(), live(), consent.isGranted else {
       retireConnection(ownerID: ownerID, invocationID: invocationID)
-      return .failure("本次调用没有取得仍有效的逐次批准，没有派发手机动作。不要自动重试。")
+      return .failure("本次任务没有取得仍有效的授权，没有派发手机动作。不要自动重试。")
     }
     progress(.connecting)
 
@@ -201,9 +223,10 @@ final class IOSPhoneRunner {
         // the native probe reports no input, an already enabled enhancement
         // can prepare a NEW XCTest observation, with normal approval below.
         // Never carry a CoreDevice element ID into an XCTest input request.
-        let mayEnhance = link.xctestEnabled && !mustCore && !link.appRoutes.values.contains("coredevice")
-        if capabilities["touch"] == false, mayEnhance, plan.method == .screen { break }
-        if capabilities["touch"] == false, link.xctestEnabled, plan.requiresObservation {
+        let mayEnhance = link.xctestEnabled && !mustCore
+          && (explicitApp != nil || !link.appRoutes.values.contains("coredevice"))
+        if capabilities["touch"] == false, mayEnhance, method == .screen || method == .open { break }
+        if capabilities["touch"] == false, link.xctestEnabled, requiresObservation {
           return .failure(mayEnhance
             ? "XCTest 增强已开启。当前编号来自 CoreDevice 的只读观察；请先调用 screen 获取新的 XCTest 屏幕和编号，再操作。本次没有点击、滚动或输入，不需要重复开启开关。"
             : "XCTest 增强已开启，但当前应用规则不允许自动切换。这次没有派发输入；请用户核对应用后端规则，或 handoff。")
@@ -211,8 +234,13 @@ final class IOSPhoneRunner {
         if lastRoute != .coredevice { coreActions.invalidate(); lastXCTestScreen = nil }
         lastRoute = .coredevice; lastEndpoint = nil
         progress(.executing)
+        if needsTarget, let target = targetApplication, UIApplication.shared.applicationState == .active {
+          guard live(), consent.isGranted, IOSPhoneCoreActions.requestForeground(target) else {
+            return .failure("无法返回本任务的目标应用，没有派发读屏或输入。")
+          }
+        }
         let outcome = await coreActions.run(plan, request: request, ownerID: ownerID, consent: consent, current: live)
-        if !outcome.isError, plan.method == .open { targetApplication = coreActions.lastOpenedApplication }
+        if !outcome.isError, method == .open { targetApplication = coreActions.lastOpenedApplication }
         return outcome
       case .failure(let failure):
         if failure.code == "ERR_PHONE_STOP_UNCONFIRMED" || core.isFaulted {
@@ -222,7 +250,7 @@ final class IOSPhoneRunner {
         // sharing start or any input is never retried on another backend.
         guard !mustCore, !failure.mayHaveActed, core.maySwitchBackend,
           link.xctestEnabled, !link.appRoutes.values.contains("coredevice"),
-          !plan.requiresObservation else {
+          !requiresObservation else {
           return .failure(failure.code + "：本次未完成连接；不自动重复动作。需要镜像时请到连接设置明确准备。")
         }
       }
@@ -262,6 +290,10 @@ final class IOSPhoneRunner {
     lastRoute = .xctest; lastEndpoint = endpoint
     progress(.executing)
     if let returnTarget {
+      guard live(), consent.isGranted else { return .failure(IOSPhoneSelfRunnerError.cancelled.message) }
+      // PiP can make XCTest's controller state look foreground. Request the
+      // actual scene activation instead of relying only on activate()'s state shortcut.
+      _ = IOSPhoneCoreActions.requestForeground(returnTarget)
       #if DSH_PHONE_SELF_RUNNER_DIAGNOSTICS
       IOSPhoneSelfRunner.diagnostic("target return begin")
       #endif
@@ -274,27 +306,38 @@ final class IOSPhoneRunner {
       IOSPhoneSelfRunner.diagnostic("target return confirmed")
       #endif
     }
-    if plan.needsTarget || plan.method == .open {
+    if needsTarget {
       guard await consent.waitForTarget(request, current: live), live(), consent.isGranted else {
         return .failure(consent.targetWaitFailureMessage)
       }
     }
     var arguments = plan.parameters
-    if plan.requiresObservation {
+    if requiresObservation {
       guard let screen = plan.screen ?? lastXCTestScreen, screen == lastXCTestScreen else {
         return .failure("XCTest 屏幕号已过期；请重新 screen。")
       }
       let checked = await call(endpoint, request: request, current: live,
         method: "validate", parameters: ["screen": screen])
-      guard !checked.isError, live(), consent.isGranted, IOSPetOverlay.shared.isKeepingAlive else {
+      guard !checked.isError, live(), consent.isGranted else {
         return .failure("批准后未能重新核对 XCTest 屏幕，未派发该动作；请重新 screen。")
       }
       // key accepts an omitted screen in the public API, but the actual RPC
       // must carry the exact observation validated in this invocation.
-      if plan.method == .key { arguments["screen"] = screen }
+      if method == .key { arguments["screen"] = screen }
       lastXCTestScreen = nil
     }
-    return await call(endpoint, request: request, current: live, parameters: arguments)
+    if method == .open, let application = explicitApp {
+      guard live(), consent.isGranted else { return .failure(IOSPhoneSelfRunnerError.cancelled.message) }
+      _ = IOSPhoneCoreActions.requestForeground(application)
+    }
+    let outcome = await call(endpoint, request: request, current: live, parameters: arguments)
+    if method == .open, !outcome.isError {
+      guard await consent.waitForTarget(request, current: live), live(), consent.isGranted else {
+        lastXCTestScreen = nil
+        return .failure("应用打开请求已派发，但未确认目标画面和后台接续状态。请核对手机；这次不会自动重复打开。")
+      }
+    }
+    return outcome
   }
 
   /// The short route-selection wait never creates a fault. A native or local
@@ -329,19 +372,16 @@ final class IOSPhoneRunner {
   private func call(_ endpoint: Endpoint, request: IOSPhoneRequest, current: @escaping () -> Bool,
                     method: String? = nil, parameters: [String: Any]? = nil) async -> IOSPhoneOutcome {
     let operation = method ?? request.action.method ?? ""
-    // The existing XCTest open implementation also reads the opened screen.
-    // Admit it only after actual PiP is active, without changing that method or
-    // the separate, protected automatic returnToApp implementation.
-    // Internal activation is explicitly disclosed by this call's native sheet;
-    // it is how the already approved target becomes foreground before PiP and
-    // fresh-screen admission. It is absent from the model tool catalog.
-    let needsTarget = operation != "apps" && operation != "activate"
+    // Open/activate establish the target and can start from our foreground.
+    // Other screen/input RPCs require this controller to be in the background. The open result
+    // reaches its caller only after run() verifies that background transition.
+    // Internal activation stays outside the model tool catalog.
+    let needsTarget = operation != "apps" && operation != "activate" && operation != "open"
     let permitted = { !Task.isCancelled && current() && self.consent.isGranted
       && IOSPhoneLink.shared.xctestEnabled && UIApplication.shared.isProtectedDataAvailable
       && request.expiresAt > Date().timeIntervalSince1970 * 1000
       && (endpoint.runId == nil || self.selfRunner.owns(endpoint))
-      && (!needsTarget || (UIApplication.shared.applicationState == .background
-        && IOSPetOverlay.shared.isKeepingAlive)) }
+      && (!needsTarget || UIApplication.shared.applicationState == .background) }
     guard permitted() else {
       return .failure(IOSPhoneSelfRunnerError.cancelled.message)
     }

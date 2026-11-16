@@ -1,7 +1,5 @@
-// 手机操控 → 宠物画中画 (iOS): the pet in picture-in-picture is what keeps the app alive while it
-// operates the phone, so phone control waits for it. The switches are the native side's own
-// questions (tooling/ios/pet-overlay-tests/README.md); when it stops (the system closed it, the
-// phone locked, audio was taken over) it says why and offers 恢复.
+// Optional iOS picture-in-picture pet. Phone control uses system continued tasks;
+// enabling or recovering this window remains an explicit native choice.
 
 import 'dart:async';
 
@@ -71,9 +69,8 @@ class IosPetPipSection extends ConsumerWidget {
 
     return ListPageCard(
       children: [
-        PhoneStepRow(
-          step: 4,
-          done: s.enabled && s.usable,
+        ListPageRow(
+          icon: AppIcons.pet,
           title: l10n.iosPetPipTitle,
           subtitle: line,
           trailing: Switch.adaptive(value: s.enabled, onChanged: (on) => unawaited(overlay.iosSetEnabled(on))),

@@ -354,6 +354,7 @@ int dsh_file_unlink(dsh_root *r, const char *p, size_t n) {
 
 struct dsh_directory {
   DIR *stream;
+  bool readonly;
 };
 dsh_directory *dsh_directory_open(dsh_root *r, const char *p, size_t n) {
   if (!r || !p) {
@@ -391,6 +392,7 @@ dsh_directory *dsh_directory_open(dsh_root *r, const char *p, size_t n) {
     return NULL;
   }
   d->stream = stream;
+  d->readonly = r->readonly;
   return d;
 }
 void dsh_directory_close(dsh_directory *d) {
@@ -428,6 +430,18 @@ int dsh_directory_rewind(dsh_directory *d) {
 }
 int dsh_directory_stat(dsh_directory *d, struct stat *s) {
   return fstat(dirfd(d->stream), s);
+}
+int dsh_directory_chmod(dsh_directory *d, mode_t mode) {
+  if (d->readonly)
+    return deny();
+  if (mode & ~0777) {
+    errno = EPERM;
+    return -1;
+  }
+  return fchmod(dirfd(d->stream), mode);
+}
+int dsh_directory_times(dsh_directory *d, const struct timespec times[2]) {
+  return d->readonly ? deny() : futimens(dirfd(d->stream), times);
 }
 int dsh_directory_make(dsh_root *r, const char *p, size_t n, mode_t mode) {
   if (r->readonly)

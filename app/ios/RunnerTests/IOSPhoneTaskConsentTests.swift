@@ -4,15 +4,14 @@ import XCTest
 @testable import Runner
 
 /// Presents the production Runner confirmation controller in the host app's
-/// real foreground window. Only the person's button taps and the grant clock
-/// are synthetic. No phone action, remote request, notification response, or
-/// human approval is claimed. These UIKit tests must fail if no usable UI exists.
+/// real foreground window. Button taps, the grant clock and the foreground
+/// probe are controlled fixtures; background-reuse cases do not suspend an app.
+/// No phone action, remote request, notification response, or human approval is
+/// claimed. These UIKit tests must fail if no usable UI exists.
 @MainActor
 final class IOSPhoneTaskConsentTests: XCTestCase {
   private static let grantTitle = "允许 AI 操控这台手机？"
-  private static let callTitle = "允许这一次手机动作？"
   private static let grantButton = "允许 30 分钟"
-  private static let callButton = "允许这一次"
   private static let denyButton = "拒绝"
   private static let clipboardTitle = "准备本次非 ASCII 粘贴？"
   private static let clipboardButton = "准备剪贴板"
@@ -31,6 +30,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     let host: UIViewController
     var clock: TimeInterval? = 1000
     var current = true
+    var foreground = true
     var onCurrentCheck: (() -> Void)?
     var presentationAttempts = 0
     var admittedContinuations = 0
@@ -90,7 +90,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
         return state.host
       })
       self.actions = actions
-      consent = Runner.IOSPhoneTaskConsent(actions: actions, now: { state.clock })
+      consent = Runner.IOSPhoneTaskConsent(actions: actions, now: { state.clock }, isForeground: { state.foreground })
     }
 
     func retireAndCancel() {
@@ -202,8 +202,8 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
         !sheet.isBeingPresented, !sheet.isBeingDismissed
       {
         fixture.sheets.append(sheet)
-        let heading = clipboard ? Self.clipboardTitle : (grant ? Self.grantTitle : Self.callTitle)
-        let allow = clipboard ? Self.clipboardButton : (grant ? Self.grantButton : Self.callButton)
+        let heading = clipboard ? Self.clipboardTitle : Self.grantTitle
+        let allow = clipboard ? Self.clipboardButton : Self.grantButton
         let deny = clipboard ? Self.clipboardDeny : Self.denyButton
         guard Self.labels(in: sheet.view).contains(where: { $0.text == heading }),
           Self.buttons(in: sheet.view).contains(where: { $0.currentTitle == allow }),
@@ -257,8 +257,6 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     let operation = try start(fixture, run: run, session: session)
     let grant = try await nextSheet(fixture, operation: operation, grant: true)
     try answer(grant, title: Self.grantButton)
-    let call = try await nextSheet(fixture, operation: operation, grant: false)
-    try answer(call, title: Self.callButton)
     try await completed(operation, expected: true)
     XCTAssertTrue(fixture.consent.isGranted)
     return operation
@@ -267,48 +265,45 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
   func testTargetWaitDoesNotCountForegroundTimeOrReturnOnTheFirstBackgroundSample() throws {
     var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
     XCTAssertEqual(wait.sample(now: 100, background: false, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
+      eligible: true), .waiting)
     XCTAssertEqual(wait.sample(now: 120, background: false, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
+      eligible: true), .waiting)
     XCTAssertEqual(wait.sample(now: 130, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
+      eligible: true), .waiting)
     XCTAssertEqual(wait.sample(now: 130.749, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
+      eligible: true), .waiting)
     XCTAssertEqual(wait.sample(now: 130.75, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .ready)
+      eligible: true), .ready)
   }
 
-  func testTargetWaitStartsItsDelayOnlyAfterActualPiPKeepAlive() throws {
+  func testTargetWaitStartsItsDelayOnlyAfterLeavingTheController() throws {
+    var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
+    XCTAssertEqual(wait.sample(now: 100, background: false, protectedDataAvailable: true,
+      eligible: true), .waiting)
+    XCTAssertEqual(wait.sample(now: 102.5, background: true, protectedDataAvailable: true,
+      eligible: true), .waiting)
+    XCTAssertEqual(wait.sample(now: 103.249, background: true, protectedDataAvailable: true,
+      eligible: true), .waiting)
+    XCTAssertEqual(wait.sample(now: 103.25, background: true, protectedDataAvailable: true,
+      eligible: true), .ready)
+  }
+
+  func testTargetWaitDoesNotRequireAnOverlay() throws {
     var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
     XCTAssertEqual(wait.sample(now: 100, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: false), .waiting)
-    XCTAssertEqual(wait.sample(now: 102.5, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
-    XCTAssertEqual(wait.sample(now: 103.249, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
-    XCTAssertEqual(wait.sample(now: 103.25, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .ready)
+      eligible: true), .waiting)
+    XCTAssertEqual(wait.sample(now: 100.75, background: true, protectedDataAvailable: true,
+      eligible: true), .ready)
   }
 
-  func testTargetWaitRefusesPiPStartupAtItsExactDeadline() throws {
-    for keepingAlive in [false, true] {
+  func testTargetWaitAbortsOnForegroundLockOrRetiredEligibility() throws {
+    let conditions = [(false, true, true), (true, false, true), (true, true, false)]
+    for (background, protectedData, eligible) in conditions {
       var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
       XCTAssertEqual(wait.sample(now: 100, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: false), .waiting)
-      XCTAssertEqual(wait.sample(now: 103, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: keepingAlive), .refused)
-    }
-  }
-
-  func testTargetWaitAbortsOnForegroundLockLostPiPOrRetiredEligibility() throws {
-    let conditions = [(false, true, true, true), (true, false, true, true),
-      (true, true, false, true), (true, true, true, false)]
-    for (background, protectedData, eligible, pip) in conditions {
-      var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
-      XCTAssertEqual(wait.sample(now: 100, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: true), .waiting)
+        eligible: true), .waiting)
       XCTAssertEqual(wait.sample(now: 100.8, background: background,
-        protectedDataAvailable: protectedData, eligible: eligible, keepingAlive: pip), .refused)
+        protectedDataAvailable: protectedData, eligible: eligible), .refused)
     }
   }
 
@@ -316,9 +311,9 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     for budget in [0.5, 45.0, 600.0] {
       var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: budget))
       XCTAssertEqual(wait.sample(now: 100, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: true), .waiting)
+        eligible: true), .waiting)
       XCTAssertEqual(wait.sample(now: 100 + min(45, budget), background: true,
-        protectedDataAvailable: true, eligible: true, keepingAlive: true), .refused)
+        protectedDataAvailable: true, eligible: true), .refused)
     }
   }
 
@@ -328,9 +323,9 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     for time in invalid {
       var wait = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
       XCTAssertEqual(wait.sample(now: 100, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: true), .waiting)
+        eligible: true), .waiting)
       XCTAssertEqual(wait.sample(now: time, background: true, protectedDataAvailable: true,
-        eligible: true, keepingAlive: true), .refused)
+        eligible: true), .refused)
     }
     let invalidStarts: [TimeInterval?] = [nil, TimeInterval.nan, TimeInterval.infinity,
       -TimeInterval.infinity]
@@ -345,55 +340,65 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
   func testEachTargetReturnStartsANewDelayIncludingTheClipboardRoundTrip() throws {
     var first = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 100, requestRemaining: 60))
     _ = first.sample(now: 100, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true)
+      eligible: true)
     XCTAssertEqual(first.sample(now: 100.75, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .ready)
+      eligible: true), .ready)
     var next = try XCTUnwrap(Runner.IOSPhoneTargetWait(start: 101, requestRemaining: 59))
     XCTAssertEqual(next.sample(now: 101, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .waiting)
+      eligible: true), .waiting)
     XCTAssertEqual(next.sample(now: 101.75, background: true, protectedDataAvailable: true,
-      eligible: true, keepingAlive: true), .ready)
+      eligible: true), .ready)
   }
 
-  func testInitialApprovalNeedsTaskGrantThenSeparateCallSheet() async throws {
+  func testOptionalOverlayUpgradeDefaultsOffAndPreservesLaterExplicitChoice() throws {
+    let name = "dsh-optional-pip-" + UUID().uuidString
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    defaults.set(true, forKey: "dsh.ios.petOverlay.enabled")
+    defaults.set(true, forKey: "dsh.ios.petOverlay.alwaysShow")
+    let first = Runner.IOSPetOverlay.configuration(from: defaults)
+    XCTAssertFalse(first.enabled)
+    XCTAssertFalse(first.alwaysShow)
+    defaults.set(true, forKey: "dsh.ios.petOverlay.enabled")
+    let explicit = Runner.IOSPetOverlay.configuration(from: defaults)
+    XCTAssertTrue(explicit.enabled)
+    XCTAssertFalse(explicit.alwaysShow)
+  }
+
+  func testOptionalOverlayFreshInstallationDefaultsOff() throws {
+    let name = "dsh-optional-pip-" + UUID().uuidString
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+    defer { defaults.removePersistentDomain(forName: name) }
+    let value = Runner.IOSPetOverlay.configuration(from: defaults)
+    XCTAssertFalse(value.enabled)
+    XCTAssertFalse(value.alwaysShow)
+  }
+
+  func testInitialApprovalGrantsTheTaskWithOneExplicitSheet() async throws {
     try await withFixture { fixture in
       let operation = try self.start(fixture)
       let grant = try await self.nextSheet(fixture, operation: operation, grant: true)
       XCTAssertFalse(fixture.consent.isGranted)
       XCTAssertNil(operation.answer)
       XCTAssertEqual(fixture.state.admittedContinuations, 0)
-      XCTAssertEqual(fixture.state.presentationAttempts, 1)
-
       try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      XCTAssertFalse(grant === call)
+      try await self.completed(operation, expected: true)
       XCTAssertTrue(fixture.consent.isGranted)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1800)
-      XCTAssertNil(operation.answer)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
-
-      try self.answer(call, title: Self.callButton)
-      try await self.completed(operation, expected: true)
-      XCTAssertEqual(fixture.state.admittedContinuations, 1)
-      XCTAssertEqual(fixture.sheets.count, 2)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
+      XCTAssertEqual(fixture.sheets.count, 1)
     }
   }
 
-  func testReusedTaskGrantStillRequiresFreshCallSheetAndDoesNotExtendExpiry() async throws {
+  func testOwnedTaskContinuesInBackgroundWithoutAnotherSheetOrDeadlineExtension() async throws {
     try await withFixture { fixture in
       try await self.establish(fixture)
       fixture.state.clock = 1060
+      fixture.state.foreground = false
       let operation = try self.start(fixture)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      XCTAssertEqual(fixture.sheets.count, 3)
-      XCTAssertEqual(fixture.state.presentationAttempts, 3)
-      XCTAssertEqual(fixture.state.admittedContinuations, 1)
-      XCTAssertNil(operation.answer)
-      XCTAssertEqual(fixture.consent.remainingSeconds, 1740)
-
-      try self.answer(call, title: Self.callButton)
       try await self.completed(operation, expected: true)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
+      XCTAssertEqual(fixture.sheets.count, 1)
       XCTAssertEqual(fixture.state.admittedContinuations, 2)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1740)
     }
@@ -411,17 +416,17 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     }
   }
 
-  func testDenyingPerCallSheetNeverAdmitsActionDespiteTaskGrant() async throws {
+  func testDifferentBackgroundSessionCannotInheritTheTaskGrant() async throws {
     try await withFixture { fixture in
-      let operation = try self.start(fixture)
-      let grant = try await self.nextSheet(fixture, operation: operation, grant: true)
-      try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      try self.answer(call, title: Self.denyButton)
+      try await self.establish(fixture)
+      fixture.state.foreground = false
+      let operation = try self.start(fixture, session: "different-session")
+      try await Task.sleep(nanoseconds: 150_000_000)
+      XCTAssertNil(operation.answer)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
+      fixture.state.current = false
       try await self.completed(operation, expected: false)
-      XCTAssertTrue(fixture.consent.isGranted)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
+      XCTAssertEqual(fixture.state.admittedContinuations, 1)
     }
   }
 
@@ -446,37 +451,19 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       XCTAssertFalse(newGrant.isBeingDismissed)
       XCTAssertFalse(fixture.consent.isGranted)
       try self.answer(newGrant, title: Self.grantButton)
-      let newCall = try await self.nextSheet(fixture, operation: replacement, grant: false)
-      try self.answer(newCall, title: Self.callButton)
       try await self.completed(replacement, expected: true)
       XCTAssertEqual(fixture.state.admittedContinuations, 1)
     }
   }
 
-  func testRetiredPerCallSheetCannotDonateItsAnswerToNewCall() async throws {
+  func testCancelledRequestCannotReuseAnOwnedTaskGrant() async throws {
     try await withFixture { fixture in
-      let oldOperation = try self.start(fixture)
-      let oldGrant = try await self.nextSheet(fixture, operation: oldOperation, grant: true)
-      try self.answer(oldGrant, title: Self.grantButton)
-      let oldCall = try await self.nextSheet(fixture, operation: oldOperation, grant: false)
-      let staleButton = try self.button(Self.callButton, in: oldCall)
-      fixture.consent.retire()
-      XCTAssertFalse(fixture.consent.isGranted)
-      try self.answer(oldCall, title: Self.callButton)
-      try await self.completed(oldOperation, expected: false)
-
-      let replacement = try self.start(fixture)
-      let newGrant = try await self.nextSheet(fixture, operation: replacement, grant: true)
-      try self.answer(newGrant, title: Self.grantButton)
-      let newCall = try await self.nextSheet(fixture, operation: replacement, grant: false)
-      staleButton.sendActions(for: .touchUpInside)
-      XCTAssertNil(replacement.answer)
-      XCTAssertTrue(Self.top() === newCall)
-      XCTAssertFalse(newCall.isBeingDismissed)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
-      try self.answer(newCall, title: Self.callButton)
-      try await self.completed(replacement, expected: true)
+      try await self.establish(fixture)
+      fixture.state.current = false
+      let operation = try self.start(fixture)
+      try await self.completed(operation, expected: false)
       XCTAssertEqual(fixture.state.admittedContinuations, 1)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
     }
   }
 
@@ -494,13 +481,11 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
         XCTAssertNil(operation.answer)
         XCTAssertEqual(fixture.state.admittedContinuations, index + 1)
         try self.answer(grant, title: Self.grantButton)
-        let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-        try self.answer(call, title: Self.callButton)
         try await self.completed(operation, expected: true)
         XCTAssertEqual(fixture.consent.remainingSeconds, 1800)
       }
       XCTAssertEqual(fixture.state.admittedContinuations, 3)
-      XCTAssertEqual(fixture.state.presentationAttempts, 6)
+      XCTAssertEqual(fixture.state.presentationAttempts, 3)
     }
   }
 
@@ -537,21 +522,22 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       try self.answer(grant, title: Self.denyButton)
       try await self.completed(replacement, expected: false)
       XCTAssertEqual(fixture.state.admittedContinuations, 1)
-      XCTAssertEqual(fixture.state.presentationAttempts, 3)
+      XCTAssertEqual(fixture.state.presentationAttempts, 2)
     }
   }
 
-  func testGrantExpiresWhilePerCallSheetIsVisibleAndLateAllowIsRejected() async throws {
+  func testExpiredBackgroundTaskCannotContinueWithoutAFreshForegroundGrant() async throws {
     try await withFixture { fixture in
-      let operation = try self.start(fixture)
-      let grant = try await self.nextSheet(fixture, operation: operation, grant: true)
-      try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
+      try await self.establish(fixture)
+      fixture.state.foreground = false
       fixture.state.clock = 2800
+      let operation = try self.start(fixture)
+      try await Task.sleep(nanoseconds: 150_000_000)
+      XCTAssertNil(operation.answer)
       XCTAssertFalse(fixture.consent.isGranted)
-      try self.answer(call, title: Self.callButton)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
+      fixture.state.current = false
       try await self.completed(operation, expected: false)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
     }
   }
 
@@ -568,16 +554,18 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
     }
   }
 
-  func testRevokedCurrentOwnerCannotAdmitVisiblePerCallApproval() async throws {
+  func testRetirementDuringOwnedAdmissionRejectsTheCall() async throws {
     try await withFixture { fixture in
+      try await self.establish(fixture)
+      fixture.state.onCurrentCheck = { [weak state = fixture.state, weak consent = fixture.consent] in
+        state?.onCurrentCheck = nil
+        consent?.retire()
+      }
       let operation = try self.start(fixture)
-      let grant = try await self.nextSheet(fixture, operation: operation, grant: true)
-      try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      fixture.state.current = false
-      try self.answer(call, title: Self.callButton)
       try await self.completed(operation, expected: false)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
+      XCTAssertFalse(fixture.consent.isGranted)
+      XCTAssertEqual(fixture.state.admittedContinuations, 1)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
     }
   }
 
@@ -605,7 +593,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       try await self.completed(operation, expected: true)
       XCTAssertEqual(fixture.state.admittedContinuations, 2)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1790)
-      XCTAssertEqual(fixture.sheets.count, 3)
+      XCTAssertEqual(fixture.sheets.count, 2)
     }
   }
 
@@ -625,7 +613,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       try await self.establish(fixture)
       let wrongOwner = try self.start(fixture, session: "another-session", clipboard: true)
       try await self.completed(wrongOwner, expected: false)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
       let operation = try self.start(fixture, clipboard: true)
       let sheet = try await self.nextSheet(fixture, operation: operation, grant: false, clipboard: true)
       fixture.consent.retire()
@@ -656,7 +644,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       XCTAssertEqual(fixture.consent.checkExpiration(), 0)
       fixture.consent.retire()
       XCTAssertEqual(owners.count, 1)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
     }
   }
 
@@ -694,11 +682,11 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       await self.fulfillment(of: [expired], timeout: 3)
       XCTAssertEqual(owners, ["engine-b/session-b"])
       XCTAssertFalse(fixture.consent.isGranted)
-      XCTAssertEqual(fixture.state.presentationAttempts, 4)
+      XCTAssertEqual(fixture.state.presentationAttempts, 2)
     }
   }
 
-  func testNewExplicitRequestAfterExpiryRequiresBothFreshSheets() async throws {
+  func testNewExplicitRequestAfterExpiryRequiresOneFreshTaskGrant() async throws {
     try await withFixture { fixture in
       try await self.establish(fixture)
       var expirations = 0
@@ -711,55 +699,10 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       XCTAssertEqual(expirations, 1)
       XCTAssertFalse(fixture.consent.isGranted)
       try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      XCTAssertNil(operation.answer)
-      try self.answer(call, title: Self.callButton)
       try await self.completed(operation, expected: true)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1800)
-      XCTAssertEqual(fixture.state.presentationAttempts, 4)
+      XCTAssertEqual(fixture.state.presentationAttempts, 2)
       XCTAssertEqual(expirations, 1)
-    }
-  }
-
-  func testMonitorExpiryInvalidatesVisibleCallEvenIfClockLaterRecovers() async throws {
-    try await withFixture { fixture in
-      let operation = try self.start(fixture)
-      let grant = try await self.nextSheet(fixture, operation: operation, grant: true)
-      try self.answer(grant, title: Self.grantButton)
-      let call = try await self.nextSheet(fixture, operation: operation, grant: false)
-      let expired = self.expectation(description: "visible call loses its original grant")
-      expired.assertForOverFulfill = true
-      fixture.consent.onExpiration = { _, _ in expired.fulfill() }
-      fixture.state.clock = 2800
-      await self.fulfillment(of: [expired], timeout: 3)
-      fixture.state.clock = 1000
-      try self.answer(call, title: Self.callButton)
-      try await self.completed(operation, expected: false)
-      XCTAssertFalse(fixture.consent.isGranted)
-      XCTAssertEqual(fixture.state.admittedContinuations, 0)
-    }
-  }
-
-  func testDecliningCallKeepsOriginalGrantAndDeadlineForNextRequest() async throws {
-    try await withFixture { fixture in
-      try await self.establish(fixture)
-      var expirations = 0
-      fixture.consent.onExpiration = { _, _ in expirations += 1 }
-      fixture.state.clock = 1060
-      let denied = try self.start(fixture)
-      let deniedCall = try await self.nextSheet(fixture, operation: denied, grant: false)
-      try self.answer(deniedCall, title: Self.denyButton)
-      try await self.completed(denied, expected: false)
-      XCTAssertEqual(fixture.consent.remainingSeconds, 1740)
-      XCTAssertEqual(expirations, 0)
-      let replacement = try self.start(fixture)
-      let replacementCall = try await self.nextSheet(fixture, operation: replacement, grant: false)
-      try self.answer(replacementCall, title: Self.callButton)
-      try await self.completed(replacement, expected: true)
-      XCTAssertEqual(fixture.consent.remainingSeconds, 1740)
-      XCTAssertEqual(fixture.state.presentationAttempts, 4)
-      XCTAssertEqual(fixture.state.admittedContinuations, 2)
-      XCTAssertEqual(expirations, 0)
     }
   }
 
@@ -809,7 +752,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       try await self.completed(operation, expected: false)
       XCTAssertEqual(expirations, 1)
       XCTAssertFalse(fixture.consent.isGranted)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
       XCTAssertEqual(fixture.state.admittedContinuations, 1)
     }
   }
@@ -839,7 +782,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       XCTAssertEqual(oldCleanup, 1)
       XCTAssertEqual(replacementCleanup, 0)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1740)
-      XCTAssertEqual(fixture.state.presentationAttempts, 4)
+      XCTAssertEqual(fixture.state.presentationAttempts, 3)
       XCTAssertEqual(fixture.state.admittedContinuations, 2)
     }
   }
@@ -878,7 +821,7 @@ final class IOSPhoneTaskConsentTests: XCTestCase {
       XCTAssertFalse(alreadyRetired)
       XCTAssertEqual(cleanup, 0)
       XCTAssertEqual(fixture.consent.remainingSeconds, 1800)
-      XCTAssertEqual(fixture.state.presentationAttempts, 2)
+      XCTAssertEqual(fixture.state.presentationAttempts, 1)
     }
   }
 }

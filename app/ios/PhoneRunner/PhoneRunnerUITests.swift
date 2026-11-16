@@ -382,7 +382,11 @@ final class PhoneTools {
     if active.isEmpty { candidates += allApps().compactMap { $0["id"] } }
     var seen = Set<String>()
     var foreground: [Application] = []
-    for identifier in candidates where identifier != Self.springBoard && seen.insert(identifier).inserted {
+    // A PiP owner can be reported foreground alongside the app underneath.
+    // Its video is a control overlay, never this task's target application.
+    for identifier in candidates where identifier != Self.springBoard
+      && identifier != context.controllerBundleID
+      && identifier != Bundle.main.bundleIdentifier && seen.insert(identifier).inserted {
       guard PhoneRunnerCallContext.isBundleID(identifier) else { continue }
       try context.check()
       let app = XCUIApplication(bundleIdentifier: identifier)

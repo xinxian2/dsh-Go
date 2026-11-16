@@ -31,10 +31,12 @@ void main() {
     expect(gallerySaveErrorText('permission'), appL10n.chatImageStorageDenied);
   }, variant: TargetPlatformVariant.only(TargetPlatform.android));
 
-  testWidgets('iOS has no voice model or recogniser to choose', (tester) async {
+  testWidgets('iOS offers reading and call settings without a local voice model', (tester) async {
     await tester.pumpWidget(_app(const VoiceSettingsPage()));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text(appL10n.iosVoiceSystemHint), findsOneWidget);
+    expect(find.byKey(const ValueKey('speech-voice')), findsOneWidget);
+    expect(find.byKey(const ValueKey('speech-call-pause')), findsOneWidget);
     expect(find.text(appL10n.voiceModelSection), findsNothing);
     expect(find.text(appL10n.voiceModeEngineHint), findsNothing);
     expect(find.text(appL10n.voiceModeAutoHint), findsNothing);

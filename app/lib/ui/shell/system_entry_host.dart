@@ -3,8 +3,9 @@
 //
 //   share sheet        a lone `.dshgo` file or a share link → the share-code
 //                      importer (as if opened); a hosted conversation link →
-//                      its replay; anything else → 新对话 with the text and
-//                      attachments in the composer, not sent
+//                      its replay; a lone character card → 酒馆; anything
+//                      else → 新对话 with the text and attachments in the
+//                      composer, not sent
 //   launcher shortcut  新对话 / 语音输入 → 新对话 (listening) · a recent
 //                      conversation → that conversation, on its host
 //   Quick Settings     新对话
@@ -19,6 +20,7 @@
 // onboarding they are held, natively and in the bridges.
 
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -34,6 +36,7 @@ import '../../state/draft_store.dart';
 import '../../state/hosts_state.dart';
 import '../../state/sessions_state.dart';
 import '../common/discard_guard.dart';
+import '../tavern/tavern_intake.dart';
 
 /// Draws nothing. Put it once in the home shell's stack, next to [LinkHost].
 class SystemEntryHost extends ConsumerStatefulWidget {
@@ -86,8 +89,26 @@ class _SystemEntryHostState extends ConsumerState<SystemEntryHost> {
       ref.read(appLinksProvider).add(link.appLink);
       return;
     }
-    // Read after the answer: shares arriving behind an unanswered 「放弃修改？」
-    // wait in the cache, not in memory.
+    // A lone character card goes to 酒馆.
+    if (share.files case [final file]
+        when share.skipped.isEmpty && await isTavernCardFile(File(file.path), file.name)) {
+      final ui = ref.read(linkRouterProvider).context ?? (mounted ? context : null);
+      if (ui != null && ui.mounted) await openTavernCardFile(ui, ref, File(file.path), file.name);
+      // HarmonyOS's inbox holds the batch until it is used: the card has been read.
+      if (share.consumption case final consumption?) unawaited(consumption.finish());
+      return;
+    }
+    // Android's native side keeps only a few unread shares, dropping the oldest
+    // as the next arrives, with no way to say one is still wanted: read it now.
+    final os = ref.read(operatingSystemProvider);
+    if (os != 'ohos' && os != 'ios') {
+      final request = await ComposeRequest.fromShare(share, heldBytes: _heldDraftBytes);
+      if (mounted) await _compose(request);
+      return;
+    }
+    // HarmonyOS's and iOS's inboxes hold a batch until it is used. Read after
+    // the answer: shares arriving behind an unanswered 「放弃修改？」 wait in the
+    // cache, not in memory.
     await _showChat();
     if (!mounted) return ComposeRequest.discardShare(share);
     final request = await ComposeRequest.fromShare(share, heldBytes: _heldDraftBytes);

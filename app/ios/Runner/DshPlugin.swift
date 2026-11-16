@@ -40,6 +40,8 @@ final class DshPlugin: NSObject, FlutterPlugin, FlutterSceneLifeCycleDelegate {
       MediaChannel(messenger: messenger),
       NotifyChannel(messenger: messenger),
       VoiceChannel(messenger: messenger),
+      IOSSpeechChannel(messenger: messenger),
+      IOSCompanionWidget(messenger: messenger),
       LauncherIconChannel(messenger: messenger),
       PerformanceChannel(messenger: messenger),
       DiagnosticsChannel(messenger: messenger),
@@ -662,8 +664,47 @@ private final class MediaChannel {
           return result(FlutterError(code: "invalid", message: "no image", details: nil))
         }
         Self.save(bytes.data, name: name, result: result)
+      case "saveVideoFile":
+        let args = arguments(call)
+        guard let path = args["path"] as? String, let name = args["name"] as? String,
+          let file = Self.videoFile(path, name: name) else {
+          return result(FlutterError(code: "invalid", message: "invalid local video", details: nil))
+        }
+        Self.saveVideo(file, name: name, result: result)
       case "openSettings": openAppSettings(UIApplication.openSettingsURLString, result: result)
       default: result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private static func videoFile(_ path: String, name: String) -> URL? {
+    guard path.hasPrefix("/"), !name.isEmpty, name.utf8.count <= 255,
+      name == (name as NSString).lastPathComponent,
+      ["mp4", "mov", "m4v"].contains((name as NSString).pathExtension.lowercased()) else { return nil }
+    let root = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+      .resolvingSymlinksInPath().standardizedFileURL.path
+    let file = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL
+    guard file.path.hasPrefix(root + "/"),
+      ["mp4", "mov", "m4v"].contains(file.pathExtension.lowercased()),
+      (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { return nil }
+    return file
+  }
+
+  private static func saveVideo(_ file: URL, name: String, result: @escaping FlutterResult) {
+    PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+      guard status == .authorized || status == .limited else {
+        return onMain { result(FlutterError(code: "permission", message: "photos refused", details: nil)) }
+      }
+      PHPhotoLibrary.shared().performChanges({
+        let options = PHAssetResourceCreationOptions()
+        options.originalFilename = name
+        options.shouldMoveFile = false
+        PHAssetCreationRequest.forAsset().addResource(with: .video, fileURL: file, options: options)
+      }) { saved, error in
+        onMain {
+          if saved { result("Photos/\(name)") }
+          else { result(FlutterError(code: "failed", message: error?.localizedDescription, details: nil)) }
+        }
       }
     }
   }

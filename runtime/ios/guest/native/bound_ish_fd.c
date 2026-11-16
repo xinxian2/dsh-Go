@@ -64,7 +64,7 @@ int dsh_bound_fsetattr(struct fd *f, struct attr a) {
     result = dsh_file_truncate(f->data, a.size);
     break;
   case attr_mode:
-    result = dsh_file_chmod(f->data, a.mode);
+    result = dsh_file_chmod(f->data, a.mode & ~S_IFMT);
     break;
   // Guest uid/gid are virtual metadata, not host chown arguments.
   case attr_uid:

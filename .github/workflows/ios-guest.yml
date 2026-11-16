@@ -7,7 +7,7 @@ name: iOS guest
 
 on:
   push:
-    branches: ['feat/ios-**', 'ios/**']
+    branches: [main, 'feat/ios-**', 'ios/**']
     paths:
       - 'runtime/ios/guest/**'
       - 'runtime/ios/host/**'

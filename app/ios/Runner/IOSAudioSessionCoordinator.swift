@@ -10,6 +10,7 @@ struct IOSAudioSessionConfiguration: Equatable {
   // Joining or leaving must not reconfigure/deactivate already accepted speech.
   static let sharedOutput = Self(category: .playback, mode: .default, options: .mixWithOthers)
   static let recording = Self(category: .record, mode: .measurement, options: [])
+  static let call = Self(category: .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker])
   static let media = Self(category: .playback, mode: .spokenAudio, options: [.duckOthers, .mixWithOthers])
   static let silentVideo = Self(category: .ambient, mode: .default, options: [])
 
@@ -34,26 +35,27 @@ protocol IOSAudioSessionBackend: AnyObject {
 }
 
 enum IOSAudioSessionRole: Equatable {
-  case pictureInPicture, companion, recording, nativeMedia, silentVideo
+  case pictureInPicture, companion, recording, call, nativeMedia, silentVideo
 
   /// Only these roles produce audible output or own microphone input. Losing
   /// an old output route does not itself invalidate silent PiP/video members.
   fileprivate var stopsForRouteLoss: Bool {
     switch self {
-    case .companion, .recording, .nativeMedia: return true
+    case .companion, .recording, .call, .nativeMedia: return true
     case .pictureInPicture, .silentVideo: return false
     }
   }
   fileprivate var shared: Bool {
     switch self {
     case .pictureInPicture, .companion, .silentVideo: return true
-    case .recording, .nativeMedia: return false
+    case .recording, .call, .nativeMedia: return false
     }
   }
   fileprivate var configuration: IOSAudioSessionConfiguration {
     switch self {
     case .pictureInPicture, .companion: return .sharedOutput
     case .recording: return .recording
+    case .call: return .call
     case .nativeMedia: return .media
     case .silentVideo: return .silentVideo
     }
