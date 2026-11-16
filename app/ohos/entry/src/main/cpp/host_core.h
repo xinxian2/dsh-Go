@@ -18,6 +18,7 @@ struct HostOptions {
   std::vector<std::string> workspace_roots;
   std::map<std::string, std::string> env;
   bool safe_mode = false;
+  bool include_ohos_phone = true;
 };
 
 struct HostState {

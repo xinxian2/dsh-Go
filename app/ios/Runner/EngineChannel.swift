@@ -82,6 +82,8 @@ private final class NativeEngine {
   ) -> Int32
   private typealias GuestConfig = @convention(c) (Int32, UnsafePointer<CChar>) -> Int32
   private let guestConfig: GuestConfig
+  private typealias LifecycleObserve = @convention(c) (Int32, Int32) -> Void
+  private let lifecycleObserve: LifecycleObserve
   private typealias Stop = @convention(c) () -> Void
   private typealias Text = @convention(c) () -> UnsafeMutablePointer<CChar>?
   private typealias Free = @convention(c) (UnsafeMutablePointer<CChar>?) -> Void
@@ -112,6 +114,7 @@ private final class NativeEngine {
       return unsafeBitCast(found, to: type)
     }
     guestConfig = try symbol("dsh_host_guest_config", as: GuestConfig.self)
+    lifecycleObserve = try symbol("dsh_host_lifecycle_observe", as: LifecycleObserve.self)
     start = try symbol("dsh_host_start", as: Start.self)
     stopEngine = try symbol("dsh_host_stop", as: Stop.self)
     state = try symbol("dsh_host_state", as: Text.self)
@@ -157,6 +160,10 @@ private final class NativeEngine {
   }
 
   func stop() { stopEngine() }
+
+  func observeLifecycle(foreground: Bool, continued: Bool) {
+    lifecycleObserve(foreground ? 1 : 0, continued ? 1 : 0)
+  }
 
   func currentState() -> [String: Any] { (read(state) as? [String: Any]) ?? [:] }
 
@@ -296,6 +303,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
   private let queue: DispatchQueue
   private let changed: () -> Void
   private let lostServer: () -> Void
+  private let publishNative: (Bool, Bool) -> Void
   private lazy var session: URLSession = {
     let configuration = URLSessionConfiguration.ephemeral
     configuration.httpCookieStorage = nil
@@ -307,7 +315,9 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     return URLSession(configuration: configuration, delegate: self, delegateQueue: delegateQueue)
   }()
 
-  init(queue: DispatchQueue, changed: @escaping () -> Void, lostServer: @escaping () -> Void) {
+  init(queue: DispatchQueue, changed: @escaping () -> Void, lostServer: @escaping () -> Void,
+       publishNative: @escaping (Bool, Bool) -> Void) {
+    self.publishNative = publishNative
     self.queue = queue
     self.changed = changed
     self.lostServer = lostServer
@@ -375,7 +385,10 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     retryDelay = 1
   }
 
+  func publishHostState() { publishNative(foreground, continued) }
+
   private func push() {
+    publishHostState()
     guard let origin, let token, requested != revision else { return }
     requested = revision
     task?.cancel()
@@ -464,7 +477,7 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     // Only actual system-backed execution counts: an active continued task or
     // a playing, unsuspended PiP with its owned audio session. A setting alone does not.
-    let foreground = self.foreground || continued
+    let foreground = self.foreground
     let body: [String: Any] = [
       "operation": "host", "revision": revision, "foreground": foreground,
       "computePermission": continued ? "granted" : "denied",
@@ -477,7 +490,10 @@ private final class EngineLifecycle: NSObject, URLSessionTaskDelegate {
       guard http.statusCode == 200, let data,
         let ack = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
         (ack["v"] as? Int) == 1, let host = ack["host"] as? [String: Any],
-        (host["revision"] as? Int) == revision, (host["foreground"] as? Bool) == foreground,
+        (ack["observationRevision"] as? Int) == revision, (host["foreground"] as? Bool) == foreground,
+        let snapshot = ack["nativeHost"] as? [String: Any],
+        (snapshot["available"] as? Int) == 1, (snapshot["clockFailed"] as? Int) == 0,
+        foreground || ((host["computePermission"] as? String) == "granted") == continued,
         (ack["closed"] as? Bool) == false, (ack["blocked"] as? Bool) == false
       else { return done(http.statusCode == 200 ? "ios_lifecycle_ack" : "ios_lifecycle_control") }
       done(nil)
@@ -523,7 +539,10 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
   private lazy var lifecycle = EngineLifecycle(
     queue: queue,
     changed: { [weak self] in self?.lifecycleChanged() },
-    lostServer: { [weak self] in self?.restartAfterLostServer() })
+    lostServer: { [weak self] in self?.restartAfterLostServer() },
+    publishNative: { [weak self] foreground, continued in
+      self?.native?.observeLifecycle(foreground: foreground, continued: continued)
+    })
 
   private var sink: FlutterEventSink?
   private var archive: RuntimeArchive?
@@ -1096,6 +1115,7 @@ final class EngineChannel: NSObject, FlutterStreamHandler {
       linuxSnapshot["addon"] = (native?.frameworks ?? "") + "/DshGuestBridge.framework/DshGuestBridge"
       linuxSnapshot["protectedPaths"] = protectedPaths
       try native?.configureGuest(linuxSnapshot)
+      lifecycle.publishHostState()
       try native?.begin(
         runtime: installer.root.path, guest: guestRoot.path, home: dshHome.path, cache: cache.path,
         workspace: workspace.path, env: launchEnvironment)

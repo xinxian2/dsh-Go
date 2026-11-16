@@ -358,7 +358,6 @@ try {
   const first = await waitReady(0, 240000);
   engineEnded = null;
   report.readyMs = Date.now() - startedAt;
-  await checkMarket(first);
   const completedSession = await round(first);
   await round(first, { mode: 'cancel' });
   report.status = 'ROUND_PASSED';
@@ -372,6 +371,7 @@ try {
   await round(second, { restore: interruptedSession });
   await round(second);
   report.restart = 'passed';
+  await checkMarket(second);
   report.status = 'PASS';
   report.stage = 'complete';
 } catch (error) {

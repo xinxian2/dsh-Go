@@ -19,6 +19,13 @@ extern "C" int dsh_node_stop();
 namespace {
 std::mutex host_mutex;
 std::unique_ptr<dsh::Host> host;
+uint64_t lifecycle_owner = 0;
+#ifdef DSH_IOS_ENGINE_SMOKE
+bool lifecycle_foreground = true;
+#else
+bool lifecycle_foreground = false;
+#endif
+bool lifecycle_continued = false;
 
 char* Copy(const std::string& text) {
   char* copy = static_cast<char*>(std::malloc(text.size() + 1));
@@ -72,6 +79,7 @@ int dsh_host_start(const char* runtime_root, const char* guest_root, const char*
   options.cache_dir = cache_dir;
   options.native_library_dir = native_library_dir;
   options.workspace_roots = {workspace};
+  options.include_ohos_phone = false;
   for (int i = 0; i < env_count; ++i) options.env[env_keys[i]] = env_values[i];
   // The virtual shell finds its commands through this, in its own filesystem. What the
   // process inherits varies (the Simulator's has no /bin), and nothing else runs from it.
@@ -88,6 +96,8 @@ int dsh_host_start(const char* runtime_root, const char* guest_root, const char*
     dsh::ios::PreserveRelocationOrigin(options);
     auto next = std::make_unique<dsh::Host>();
     next->Start(std::move(options), dsh_node_start, dsh_node_stop);
+    lifecycle_owner = next->Lifecycle().BeginOwner(lifecycle_foreground);
+    if (!lifecycle_foreground && lifecycle_continued) next->Lifecycle().SetContinuous(lifecycle_owner, true);
     host = std::move(next);
     return 0;
   } catch (const dsh::HostError& error) {
@@ -98,6 +108,27 @@ int dsh_host_start(const char* runtime_root, const char* guest_root, const char*
     if (error_message != nullptr) *error_message = Copy(error.what());
   }
   return 1;
+}
+
+extern "C" int dsh_ios_read_lifecycle(DshHostLifecycleSnapshotV1* output, uint32_t size) noexcept {
+  try {
+    std::lock_guard<std::mutex> lock(host_mutex);
+    return host ? host->Lifecycle().Snapshot(output, size) : -1;
+  } catch (...) { return -1; }
+}
+
+extern "C" __attribute__((visibility("default")))
+void dsh_host_lifecycle_observe(int foreground, int continued) {
+  std::lock_guard<std::mutex> lock(host_mutex);
+  const bool next_foreground = foreground != 0;
+  const bool next_continued = !next_foreground && continued != 0;
+  if (host && (next_foreground != lifecycle_foreground || next_continued != lifecycle_continued)) {
+    auto& lifecycle = host->Lifecycle();
+    lifecycle.Foreground(lifecycle_owner, next_foreground);
+    if (!next_foreground) lifecycle.SetContinuous(lifecycle_owner, next_continued);
+  }
+  lifecycle_foreground = next_foreground;
+  lifecycle_continued = next_continued;
 }
 
 extern "C" __attribute__((visibility("default"))) void dsh_host_stop() {

@@ -19,6 +19,10 @@
 #include <vector>
 
 #include "publication_binding.h"
+#include "lifecycle_snapshot.h"
+
+extern "C" int dsh_ios_read_lifecycle(DshHostLifecycleSnapshotV1*, uint32_t) noexcept;
+void SetAppleLifecycleReader(DshReadHostLifecycleV1);
 #include "image_binding.h"
 #include "phone_binding.h"
 #include "activity_clock_binding.h"
@@ -187,6 +191,7 @@ void* RunOnEngineThread(void* raw) {
       run->finished_changed.notify_one();
     }
   } finished{run};
+  SetAppleLifecycleReader(dsh_ios_read_lifecycle);
   if (!initialization) {
     dsh_ios::RegisterActivityClockBinding();
     dsh_ios::guest_config::Register();

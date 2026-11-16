@@ -344,6 +344,9 @@ void Host::Run(HostOptions options, StartNode start_node) {
     const std::string profile = options.dsh_home + "/ohos-host.patch.json";
     const std::string safe_patch = options.safe_mode
         ? "{\"id\":\"hmr\",\"disabled\":true}," : "";
+    const std::string phone_patch = options.include_ohos_phone
+        ? "{\"id\":\"ohos-phone\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/phone/index.mjs")) + "},"
+        : "";
     WriteProfile(profile, "[" + safe_patch + "{\"id\":\"subprocess\",\"disabled\":true},{\"id\":\"sandbox\",\"disabled\":true},"
         "{\"id\":\"working-directory\",\"config\":{\"defaultDirectory\":" + Json(options.workspace_roots[0]) + "}},"
         "{\"id\":\"sandbox-policy\",\"config\":{\"mode\":" + Json(mode) + ",\"workspaceRoot\":" + Json(options.workspace_roots[0]) + "}},"
@@ -351,8 +354,7 @@ void Host::Run(HostOptions options, StartNode start_node) {
         ",\"config\":{\"workspaceRoots\":[" + roots + "],\"temporaryRoot\":" + Json(temporary) + "}},"
         "{\"id\":\"ohos-sandbox\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/process/sandbox.mjs")) + "},"
         "{\"id\":\"ohos-lifecycle\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/lifecycle/index.mjs")) + "},"
-        "{\"id\":\"ohos-phone\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/phone/index.mjs")) + "},"
-        "{\"id\":\"ohos-capabilities\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/capabilities/index.mjs")) + "},"
+        + phone_patch + "{\"id\":\"ohos-capabilities\",\"name\":" + Json(File(options.runtime_root, "runtime/ohos/capabilities/index.mjs")) + "},"
         "{\"id\":\"dsh-go-bridge\",\"name\":" + Json(File(options.runtime_root, "runtime/bridge/dsh-go-bridge/lib/index.js")) + "}]}]\n");
     int code;
     {

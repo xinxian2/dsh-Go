@@ -383,7 +383,14 @@ struct LifecycleReader {
   DshReadHostLifecycleV1 read = nullptr;
   DshHostPhoneV1 phone = nullptr;
 };
-LifecycleReader& HostReader() { static LifecycleReader reader; return reader; }
+LifecycleReader& HostReader() {
+#ifdef __APPLE__
+  static thread_local LifecycleReader reader;
+#else
+  static LifecycleReader reader;
+#endif
+  return reader;
+}
 
 napi_value GetHostLifecycleSnapshot(napi_env env, napi_callback_info) {
   if (std::this_thread::get_id() != HostReader().thread) {
@@ -546,6 +553,13 @@ napi_module publication_module = {
     "dsh_ohos_publication", nullptr, {nullptr, nullptr, nullptr, nullptr}};
 
 }  // namespace
+
+#ifdef __APPLE__
+void SetAppleLifecycleReader(DshReadHostLifecycleV1 read) {
+  HostReader().thread = std::this_thread::get_id();
+  HostReader().read = read;
+}
+#endif
 
 void RegisterPublicationBinding() {
   CloneOwnerThread() = std::this_thread::get_id();
