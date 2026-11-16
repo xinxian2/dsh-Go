@@ -263,6 +263,8 @@ void Host::Start(HostOptions options, StartNode start_node, StopNode stop_node) 
   options.dsh_home = Directory(options.dsh_home);
   options.cache_dir = Directory(options.cache_dir);
   options.native_library_dir = NativeDirectory(options.native_library_dir);
+#if !defined(DSH_IOS_HOST)
+  // iOS configures its optional iSH guest separately through the native guest bridge.
   Require(Directory(options.linux_directory, "ERR_OHOS_LINUX_DIRECTORY") == options.linux_directory,
           "ERR_OHOS_LINUX_DIRECTORY", "Linux data must not be redirected by symlinks");
   for (const auto& root : {options.runtime_root, options.guest_root}) {
@@ -270,6 +272,7 @@ void Host::Start(HostOptions options, StartNode start_node, StopNode stop_node) 
                 root.rfind(options.linux_directory + "/", 0) != 0,
             "ERR_OHOS_LINUX_DIRECTORY", "Linux data must be separate from the runtime and host workspace");
   }
+#endif
   Require(options.workspace_roots.size() == 1, "ERR_OHOS_HOST_WORKSPACES", "The single authorized guest workspace is required");
   for (auto& root : options.workspace_roots) root = Directory(root);
   const auto user_home = options.guest_root + "/root";
